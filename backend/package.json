@@ -11,7 +11,7 @@
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
-    "@multi-agent-ops/shared": "workspace:*",
+    "@multi-agent-ops/shared": "0.1.0",
     "fastify": "5.12.7",
     "pg": "^8.16.0"
   },

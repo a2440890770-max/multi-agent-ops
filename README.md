@@ -2,12 +2,14 @@
 
 内部团队的多 Agent 智能运营项目。第一阶段面向微博单账号纯文案场景。
 
+本仓库使用 **npm workspaces**，由根目录 `package.json` 统一管理 `frontend/`、`backend/`、`agent/`、`shared/`；依赖版本锁定在 `package-lock.json`。
+
 当前交付为 **D1 工程骨架**：三部分可同时启动、数据库开发环境、服务健康检测和 CI。尚未实现任务创建、模拟任务执行、真实模型调用、记忆、审批与发布。Agent 的 `shell` 状态只代表入口启动，不代表具备执行能力。
 
 ## 环境前提
 
 - Git、Node.js **24.14.0**（可用 `nvm install && nvm use`）。
-- pnpm **11.24.0**；尚未安装时运行 `npm install -g pnpm@11.24.0`。
+- npm **11.9.0**（团队基准版本）；先用 `npm --version` 检查。需要调整时运行 `npm install -g npm@11.9.0`。不需要安装其他包管理器。
 - 已安装并启动 Docker Engine + Compose v2。macOS/Windows 可使用 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。
 - 本地端口 5173、3001、3002、5432 可用。GitHub 私有仓库还需本机具有仓库读取权限。
 
@@ -23,13 +25,13 @@ cd multi-agent-ops
 1. 安装依赖：
 
    ```sh
-   pnpm i
+   npm install
    ```
 
 2. 生成本地配置并启动 PostgreSQL：
 
    ```sh
-   pnpm env:setup
+   npm run env:setup
    ```
 
    自动创建 `.env` 和随机本地数据库密码，启动数据库并等待健康检查。重复执行不覆盖已有 `.env`。不会写入业务表，不会创建 Langfuse 或调用真实模型。
@@ -37,12 +39,12 @@ cd multi-agent-ops
 3. 启动三部分：
 
    ```sh
-   pnpm dev
+   npm run dev
    ```
 
-打开 **http://127.0.0.1:5173**。页面应显示后端、Agent 空壳、数据库均“已连接”。在终端按 Ctrl+C 停止开发服务；数据库独立运行，可用 `pnpm db:down` 停止，持久卷保留。
+打开 **http://127.0.0.1:5173**。页面应显示后端、Agent 空壳、数据库均“已连接”。在终端按 Ctrl+C 停止开发服务；数据库独立运行，可用 `npm run db:down` 停止，持久卷保留。
 
-**只看空壳：** `pnpm i && pnpm dev` 可以不经 setup 启动界面与两个服务入口；数据库会如实显示“待配置”或“未连接”。这不等于数据库环境验收通过。
+**只看空壳：** `npm install && npm run dev` 可以不经 setup 启动界面与两个服务入口；数据库会如实显示“待配置”或“未连接”。这不等于数据库环境验收通过。
 
 ## 目录与职责
 
@@ -59,22 +61,28 @@ tests/e2e/      真实前后端联调的浏览器冒烟测试
 .github/        CI、Issue 模板和 PR 模板
 ```
 
-共享包先构建再启动；`pnpm dev` 自动处理。首期不引入 Temporal、Mem0 或真实发布服务。Langfuse 使用官方 Cloud，后续只加入接入代码。
+共享包先构建再启动；`npm run dev` 自动处理，并通过 concurrently 同时启动各部分，一个进程退出时会结束其余进程。首期不引入 Temporal、Mem0 或真实发布服务。Langfuse 使用官方 Cloud，后续只加入接入代码。
 
 ## 常用命令
 
-| 命令                                    | 用途                                                     |
-| --------------------------------------- | -------------------------------------------------------- |
-| `pnpm dev`                              | 启动共享契约监听、前端、后端和 Agent 空壳                |
-| `pnpm check`                            | 格式、Lint、类型、后端测试和所有包构建                   |
-| `pnpm format`                           | 统一格式                                                 |
-| `pnpm env:setup`                        | 首次生成本地环境并启动数据库                             |
-| `pnpm db:up` / `pnpm db:down`           | 启停数据库，不删除持久卷                                 |
-| `pnpm db:check`                         | 检查数据库连接和临时表读写                               |
-| `pnpm exec playwright install chromium` | 安装本机浏览器测试依赖                                   |
-| `pnpm test:e2e`                         | 启动并验证真实前后端及 Agent 空壳；CI 额外要求数据库就绪 |
+| 命令                                      | 用途                                                     |
+| ----------------------------------------- | -------------------------------------------------------- |
+| `npm run dev`                             | 启动共享契约监听、前端、后端和 Agent 空壳                |
+| `npm run check`                           | 格式、Lint、类型、后端测试和所有包构建                   |
+| `npm run format`                          | 统一格式                                                 |
+| `npm run env:setup`                       | 首次生成本地环境并启动数据库                             |
+| `npm run db:up` / `npm run db:down`       | 启停数据库，不删除持久卷                                 |
+| `npm run db:check`                        | 检查数据库连接和临时表读写                               |
+| `npm exec -- playwright install chromium` | 安装本机浏览器测试依赖                                   |
+| `npm run test:e2e`                        | 启动并验证真实前后端及 Agent 空壳；CI 额外要求数据库就绪 |
 
 后端入口：`GET /api/health`（存活）、`GET /api/ready`（数据库就绪，失败为 503）、`GET /api/agent-health`（Agent 探测）。Agent 入口：`GET /health`。开发服务默认仅监听本机，不是生产部署方案。
+
+## 已有本地目录切换方式
+
+首次切换到本版本时，在更新代码并停止旧开发进程后运行 `npm ci`，再运行 `npm run dev`。如果本地子目录遗留旧安装生成的 `node_modules`，先移走这些依赖目录，再重新 `npm ci`；保留 `.env` 和数据库卷，不删除业务数据。
+
+日常添加依赖后提交根目录 `package-lock.json`。全新克隆可使用 `npm install`，复现锁定环境及 CI 使用 `npm ci`。例如，只向前端添加依赖时使用 `npm install 包名 --workspace=frontend`，单独构建共享包使用 `npm run build --workspace=shared`。
 
 ## 两人协作与 CI
 

@@ -1,8 +1,0 @@
-packages:
-  - frontend
-  - backend
-  - agent
-  - shared
-minimumReleaseAge: 1440
-allowBuilds:
-  esbuild: true

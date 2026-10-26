@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 const path = fileURLToPath(new URL('../.env', import.meta.url));
 if (existsSync(path)) process.loadEnvFile(path);
-if (!process.env.DATABASE_URL) throw new Error('缺少 DATABASE_URL，请先运行 pnpm env:setup。');
+if (!process.env.DATABASE_URL) throw new Error('缺少 DATABASE_URL，请先运行 npm run env:setup。');
 const client = new pg.Client({
   connectionString: process.env.DATABASE_URL,
   connectionTimeoutMillis: 3000,

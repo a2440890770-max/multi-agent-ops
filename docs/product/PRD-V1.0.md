@@ -613,6 +613,6 @@ agent-ops/
 
 ├── package.json
 
-├── pnpm-workspace.yaml
+├── package-lock.json
 
 └── README.md
