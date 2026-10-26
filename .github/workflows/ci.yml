@@ -15,37 +15,35 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
+          cache: npm
+      - run: npm ci
+      - run: npm run check
   smoke:
     name: smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm env:setup
-      - run: pnpm db:check
+          cache: npm
+      - run: npm ci
+      - run: npm run env:setup
+      - run: npm run db:check
       - name: Verify volume survives container recreation
         run: |
           docker compose --env-file .env -f infra/docker-compose.yml exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE TABLE d1_persistence_probe (id integer PRIMARY KEY); INSERT INTO d1_persistence_probe VALUES (42);"'
-          pnpm db:down
-          pnpm db:up
+          npm run db:down
+          npm run db:up
           actual=$(docker compose --env-file .env -f infra/docker-compose.yml exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT id FROM d1_persistence_probe"')
           test "$actual" = "42"
           docker compose --env-file .env -f infra/docker-compose.yml exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "DROP TABLE d1_persistence_probe"'
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      - run: npm exec -- playwright install --with-deps chromium
+      - run: npm run test:e2e
         env:
           EXPECT_DATABASE_READY: '1'
           CI: 'true'
@@ -59,4 +57,4 @@ jobs:
           retention-days: 7
       - name: Stop development database
         if: always()
-        run: pnpm db:down
+        run: npm run db:down
