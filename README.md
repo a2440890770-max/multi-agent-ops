@@ -91,3 +91,5 @@ tests/e2e/      真实前后端联调的浏览器冒烟测试
 CI 的两个必需检查名为 **`checks`** 和 **`smoke`**：前者完成格式、Lint、类型、测试与构建；后者按三步流程启动真实 PostgreSQL，验证容器重建后的持久卷、运行浏览器联调测试。详情见 [分支保护说明](docs/github-collaboration.md)。
 
 需求基线见 [PRD V1.0](docs/product/PRD-V1.0.md)，环境说明见 [开发环境](docs/infra/README.md)。
+
+D2 技术选型见 [登录、模型、搜索与 ORM](docs/architecture/adr/0001-stack-decisions.md)及 [Mem0、嵌入模型与向量存储](docs/architecture/adr/0002-memory.md)。这些是实施决策，实际运行仍为上述 D1 骨架；外部服务接通与权限验证尚未完成。
