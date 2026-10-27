@@ -1,0 +1,45 @@
+{
+  "name": "multi-agent-ops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.9.0",
+  "engines": {
+    "node": ">=24.14.0 <25",
+    "npm": ">=11.9.0 <12"
+  },
+  "scripts": {
+    "dev": "npm run build --workspace=shared && concurrently --kill-others --names shared,frontend,backend,agent \"npm run dev --workspace=shared\" \"npm run dev --workspace=frontend\" \"npm run dev --workspace=backend\" \"npm run dev --workspace=agent\"",
+    "db:up": "node scripts/database.mjs up",
+    "db:down": "node scripts/database.mjs down",
+    "db:check": "node scripts/check-database.mjs",
+    "build": "npm run build --workspace=shared && npm run build --workspace=agent && npm run build --workspace=backend && npm run build --workspace=frontend",
+    "typecheck": "npm run build --workspace=shared && npm run typecheck --workspaces && tsc -p tests/e2e/tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build --workspace=shared && npm run test --workspaces --if-present",
+    "test:e2e": "playwright test",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "env:setup": "node scripts/setup.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/node": "^24.0.0",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "^10.1.0",
+    "globals": "^17.0.0",
+    "prettier": "^3.6.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0",
+    "pg": "^8.16.0",
+    "concurrently": "10.0.6"
+  },
+  "workspaces": [
+    "shared",
+    "frontend",
+    "backend",
+    "agent"
+  ]
+}

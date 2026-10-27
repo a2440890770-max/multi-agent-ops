@@ -1,0 +1,38 @@
+name: 开发任务
+description: 按需求编号拆解可验收的开发任务
+title: '[D1] '
+body:
+  - type: input
+    id: requirement
+    attributes:
+      label: 需求编号
+      description: 例如 PRD P1-T01 或 D1 仓库骨架
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: 阶段
+      options: [第一阶段, 第二阶段, 第三阶段, 后续规划]
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 功能与边界
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完成条件
+      description: 写出可验证的行为和证据
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖与阻塞
+      description: 无依赖请填“无”
+    validations:
+      required: true
