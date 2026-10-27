@@ -11,6 +11,10 @@
 
 ## npm 工作区
 
+D2 增加了统一的 DeepSeek 官方模型配置及 SDK 结构化输出调用模块；当前入口为 `npm run model:verify`，配置与兼容边界见 [模型接入记录](deepseek-model.md)。该模块尚未接入任务执行器，健康信息中的 `canExecuteTasks` 继续保持 `false`。主模型与审核模型通过同一配置模块选择，不加载用户全局 Claude 设置或中转站认证。
+
+D2 另在 Agent 中加入按需初始化的 Mem0 OSS TypeScript SDK，使用 PostgreSQL/pgvector 和本地 Ollama 嵌入模型；SDK 历史存储使用经确认的 SQLite。真实存储与重启验证入口为 `npm run memory:verify`，范围及限制见 [Mem0 接入说明](memory.md)。该技术组件尚未接入业务任务、审批或上下文注入。
+
 根目录 `package.json` 的 `workspaces` 声明四个部分。`shared` 版本为 `0.1.0`，三个应用使用相同的普通版本引用，由 npm 链接到本地工作区；不存在需要手动发布的内部包。构建显式先处理 shared，避免依赖 workspace 列表顺序执行时读到缺失产物。
 
 开发命令通过 concurrently 并行运行四个监听进程；Ctrl+C 或其中一个进程退出时结束整组。CI 使用 `npm ci` 和根目录 `package-lock.json`，不依赖旧的包管理器配置。
