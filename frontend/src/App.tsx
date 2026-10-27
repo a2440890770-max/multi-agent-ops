@@ -1,136 +1,136 @@
 import { useEffect, useState } from 'react';
-import { PROJECT_NAME } from '@multi-agent-ops/shared';
-import type { DatabaseReadiness } from '@multi-agent-ops/shared';
+import type { Role } from '@multi-agent-ops/shared';
+import { Overview } from './pages/Overview.js';
+import { Tasks, CreateTask, Login, Memories, Evaluations, Settings } from './pages/Workspace.js';
+import { TaskDetailPage } from './pages/TaskDetail.js';
+import { Empty } from './components.js';
 
-type State = 'loading' | 'ok' | 'offline' | 'unconfigured';
-const labels: Record<State, string> = {
-  loading: '检测中',
-  ok: '已连接',
-  offline: '未连接',
-  unconfigured: '待配置',
-};
+const navigation = [
+  { path: '/', icon: '◈', label: '项目概览' },
+  { path: '/tasks', icon: '▤', label: '任务工作台' },
+  { path: '/memories', icon: '◇', label: '记忆管理' },
+  { path: '/evaluations', icon: '◫', label: '评测中心' },
+  { path: '/settings', icon: '⚙', label: '管理设置' },
+];
 export function App() {
-  const [backend, setBackend] = useState<State>('loading');
-  const [agent, setAgent] = useState<State>('loading');
-  const [database, setDatabase] = useState<State>('loading');
+  const [location, setLocation] = useState(window.location.pathname + window.location.search);
+  const [role, setRole] = useState<Role>('operator');
   useEffect(() => {
-    const controller = new AbortController();
-    async function check() {
-      const fetcher = (url: string) => fetch(url, { signal: controller.signal });
-      await Promise.all([
-        fetcher('/api/health')
-          .then((response) => setBackend(response.ok ? 'ok' : 'offline'))
-          .catch(() => {
-            if (!controller.signal.aborted) setBackend('offline');
-          }),
-        fetcher('/api/agent-health')
-          .then((response) => setAgent(response.ok ? 'ok' : 'offline'))
-          .catch(() => {
-            if (!controller.signal.aborted) setAgent('offline');
-          }),
-        fetcher('/api/ready')
-          .then(async (response) => {
-            const data = (await response.json()) as DatabaseReadiness;
-            setDatabase(
-              data.database === 'connected'
-                ? 'ok'
-                : data.database === 'unconfigured'
-                  ? 'unconfigured'
-                  : 'offline',
-            );
-          })
-          .catch(() => {
-            if (!controller.signal.aborted) setDatabase('offline');
-          }),
-      ]);
-    }
-    void check();
-    const timer = setInterval(() => {
-      void check();
-    }, 5000);
+    const update = () => setLocation(window.location.pathname + window.location.search);
+    const navigate = (event: MouseEvent) => {
+      const anchor = (event.target as HTMLElement).closest('a');
+      if (
+        !anchor ||
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey ||
+        anchor.target ||
+        anchor.hasAttribute('download')
+      )
+        return;
+      const url = new URL(anchor.href);
+      if (url.origin !== window.location.origin || url.pathname.startsWith('/api/')) return;
+      event.preventDefault();
+      window.history.pushState({}, '', url.pathname + url.search + url.hash);
+      update();
+      if (url.hash)
+        requestAnimationFrame(() => document.getElementById(url.hash.slice(1))?.scrollIntoView());
+      else window.scrollTo(0, 0);
+    };
+    window.addEventListener('popstate', update);
+    document.addEventListener('click', navigate);
     return () => {
-      controller.abort();
-      clearInterval(timer);
+      window.removeEventListener('popstate', update);
+      document.removeEventListener('click', navigate);
     };
   }, []);
-  const services = [
-    { name: '后端服务', detail: 'Fastify · TypeScript', state: backend },
-    { name: 'Agent 空壳', detail: '独立入口 · 尚无执行能力', state: agent },
-    { name: '业务数据库', detail: 'PostgreSQL 16 · 本地持久卷', state: database },
-  ];
+  const path = location.split('?')[0]!;
+  useEffect(() => {
+    document.title = `${navigation.find((n) => n.path !== '/' && path.startsWith(n.path))?.label ?? (path === '/login' ? '成员登录' : '项目概览')} · Agent Ops`;
+  }, [path]);
+  const taskMatch = /^\/tasks\/([A-Za-z0-9_-]+)$/.exec(path);
+  const currentNav = navigation.find((item) =>
+    item.path === '/' ? path === '/' : path.startsWith(item.path),
+  );
+  let page;
+  if (path === '/') page = <Overview />;
+  else if (path === '/login') page = <Login />;
+  else if (path === '/tasks') page = <Tasks />;
+  else if (path === '/tasks/new') page = <CreateTask />;
+  else if (taskMatch)
+    page = (
+      <TaskDetailPage
+        key={taskMatch[1]}
+        taskId={taskMatch[1]!}
+        search={location.split('?')[1] ?? ''}
+      />
+    );
+  else if (path === '/memories') page = <Memories />;
+  else if (path === '/evaluations' || /^\/evaluations\/[^/]+\/blind$/.test(path))
+    page = <Evaluations blind={path.endsWith('/blind')} />;
+  else if (path === '/settings') page = <Settings role={role} />;
+  else
+    page = (
+      <Empty title="页面不存在">
+        <a href="/tasks">返回任务工作台 →</a>
+      </Empty>
+    );
   return (
     <div className="layout">
       <aside className="sidebar">
         <a className="brand" href="/" aria-label="Multi-Agent Ops 首页">
           <span className="brand-icon">M</span>
-          <span>Agent Ops</span>
+          <span>
+            Agent Ops<small>运营协作工作区</small>
+          </span>
         </a>
-        <p className="nav-label">开发工作区</p>
-        <div className="nav-item">
-          ◈ <span>项目概览</span>
-          <span className="nav-dot" />
+        <p className="nav-label">工作空间</p>
+        <nav aria-label="主导航">
+          {navigation.map((item) => (
+            <a
+              key={item.path}
+              className={`nav-item ${currentNav?.path === item.path ? 'active' : ''}`}
+              href={item.path}
+              aria-current={currentNav?.path === item.path ? 'page' : undefined}
+            >
+              <span aria-hidden="true">{item.icon}</span>
+              <span>{item.label}</span>
+              {currentNav?.path === item.path && <span className="nav-dot" />}
+            </a>
+          ))}
+        </nav>
+        <div className="account-card">
+          <span className="avatar">微</span>
+          <div>
+            <strong>品牌官方微博</strong>
+            <small>单账号 · 纯文案</small>
+          </div>
         </div>
         <div className="sidebar-footer">
-          <span className="small-dot" />
-          本地开发环境
+          <label htmlFor="preview-role">预览身份（非登录）</label>
+          <select id="preview-role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+            <option value="operator">运营人员</option>
+            <option value="admin">管理员</option>
+          </select>
+          <a href="/login">成员登录 / 退出入口 ↗</a>
         </div>
       </aside>
       <main>
         <header>
           <span>
-            工作区 / <strong>项目概览</strong>
+            工作区 / <strong>{currentNav?.label ?? '成员入口'}</strong>
           </span>
-          <span className="stage">D1 · 工程初始化</span>
+          <span className="stage">D1 · {path === '/' ? '工程与连接' : '页面设计预览'}</span>
         </header>
-        <section className="intro">
-          <p className="eyebrow">BUILD THE FOUNDATION</p>
-          <h1>{PROJECT_NAME}</h1>
-          <p className="description">让研究、创作与审核在同一个工作流中协作。</p>
-          <div className="scope">
-            <span>微博 · 单账号</span>
-            <span>纯文案</span>
-            <span>人工批准发布</span>
+        {path !== '/' && (
+          <div className="preview-banner">
+            <span>设计预览</span>页面使用示例数据；业务接口尚未接入，操作不会保存或实际发布。
           </div>
-        </section>
-        <section aria-labelledby="services-title">
-          <div className="section-heading">
-            <h2 id="services-title">运行环境</h2>
-            <span>每 5 秒更新连接状态</span>
-          </div>
-          <div className="cards">
-            {services.map((service, index) => (
-              <article className="card" key={service.name}>
-                <div className="card-top">
-                  <span className="service-index">0{index + 1}</span>
-                  <span className={`badge ${service.state}`}>
-                    <span />
-                    {labels[service.state]}
-                  </span>
-                </div>
-                <h3>{service.name}</h3>
-                <p>{service.detail}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-        <section className="foundation">
-          <div className="foundation-icon">↗</div>
-          <div>
-            <h2>基础已就位，业务即将开始</h2>
-            <p>
-              当前仅提供工程骨架与连接检测。任务创建、模型调用、记忆和发布能力将在后续开发中逐步接入。
-            </p>
-            {database !== 'ok' && (
-              <p className="hint">
-                数据库未就绪时，前后端仍可启动；请按 README 完成本地数据库配置。
-              </p>
-            )}
-          </div>
-          <span className="tag">开发预览</span>
-        </section>
-        <footer>
-          frontend / backend / agent <span>统一契约 · 独立职责 · 可追溯协作</span>
-        </footer>
+        )}
+        {page}
       </main>
     </div>
   );

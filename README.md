@@ -4,9 +4,11 @@
 
 本仓库使用 **npm workspaces**，由根目录 `package.json` 统一管理 `frontend/`、`backend/`、`agent/`、`shared/`；依赖版本锁定在 `package-lock.json`。
 
-当前交付为 **D1 工程骨架与 D2 技术验证入口**：三部分可同时启动、数据库开发环境、服务健康检测和 CI；另提供模型结构化输出、只读搜索、内嵌 Mem0 真实存储与检索的独立验证命令。尚未实现任务创建、任务执行、业务记忆治理、审批与发布。Agent 的 `shell` 状态只代表入口启动，不代表具备任务执行能力。
+当前交付包括 **D1 工程骨架、接口契约与页面设计，以及 D2 技术验证入口**：保留可导航的 React 页面、53 个业务接口契约与共享类型；整合模型结构化输出、只读搜索及内嵌 Mem0 存储检索的独立验证命令。真实登录、任务执行、业务记忆治理、审批与发布尚未实现，Agent 的 `canExecuteTasks` 继续为 `false`。
 
-D2 尚未全部完成；Langfuse 按项目安排延后至主要业务流程完成后接入，微博能力仍待核查。当前完成项、真实验证边界及风险见 [D2 状态记录](docs/architecture/d2-status.md)。
+接口和页面交付见 [D1 设计索引](docs/design/README.md)。启动后访问 `/tasks` 预览页面，访问 `/api/v1/openapi.json` 读取契约；业务路由校验请求结构后返回 `501 NOT_IMPLEMENTED`，页面明确标注示例数据。`/` 保留真实连接检测。
+
+D2 尚未全部完成；Langfuse 按项目安排延后至主要业务流程完成后接入，微博能力仍待核查。当前技术验证记录及边界见 [D2 状态记录](docs/architecture/d2-status.md)。本地整合来源、冲突处理和验证见 [整合记录](docs/architecture/local-integration-2026-10-27.md)。
 
 ## 环境前提
 
@@ -51,8 +53,8 @@ cd multi-agent-ops
 ## 目录与职责
 
 ```text
-frontend/       React + Vite；页面与服务状态展示
-backend/        Fastify；API、配置与数据库就绪检查
+frontend/       React + Vite；业务页面预览与服务状态展示
+backend/        Fastify；OpenAPI 契约、业务占位与数据库就绪检查
 agent/          Agent 健康检查、模型/搜索验证和内嵌 Mem0 组件
 shared/         三部分共享的接口契约
 infra/          实际 Docker Compose 配置
@@ -70,7 +72,8 @@ tests/e2e/      真实前后端联调的浏览器冒烟测试
 | 命令                                      | 用途                                                     |
 | ----------------------------------------- | -------------------------------------------------------- |
 | `npm run dev`                             | 启动共享契约监听、前端、后端和 Agent 空壳                |
-| `npm run check`                           | 格式、Lint、类型、后端测试和所有包构建                   |
+| `npm run check`                           | 契约漂移、格式、Lint、类型、后端/Agent 测试和所有包构建  |
+| `npm run contract:generate`               | 从共享定义生成请求/响应类型及逐项接口参考                |
 | `npm run format`                          | 统一格式                                                 |
 | `npm run env:setup`                       | 首次生成本地环境并启动数据库                             |
 | `npm run db:up` / `npm run db:down`       | 启停数据库，不删除持久卷                                 |
