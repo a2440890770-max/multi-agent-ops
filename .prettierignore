@@ -3,6 +3,8 @@ node_modules/
 package-lock.json
 playwright-report/
 test-results/
+artifacts/model/
+artifacts/memory/
 .env
 .env.*
 !.env.example
