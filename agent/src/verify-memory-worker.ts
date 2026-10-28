@@ -104,10 +104,10 @@ try {
     );
     report.pgvectorVersion = version.rows[0]?.extversion;
     const profile = await client.query(
-      'SELECT model_digest FROM mem0_embedding_profiles WHERE collection_name = $1',
+      'SELECT config_fingerprint FROM mem0_embedding_profiles_v2 WHERE collection_name = $1',
       [config.collectionName],
     );
-    report.embeddingModelDigest = profile.rows[0]?.model_digest;
+    report.embeddingConfigurationFingerprint = profile.rows[0]?.config_fingerprint;
     report.postgresEvidence = { rowExists: true, dimension: config.dimension, nonzeroVector: true };
   } finally {
     await client.end();
@@ -137,7 +137,12 @@ try {
   });
 } catch (error) {
   let message = error instanceof Error ? error.message : 'Memory verification failed';
-  for (const name of ['DEEPSEEK_API_KEY', 'MEM0_DATABASE_URL', 'MEM0_POSTGRES_PASSWORD']) {
+  for (const name of [
+    'DEEPSEEK_API_KEY',
+    'OPENAI_API_KEY',
+    'MEM0_DATABASE_URL',
+    'MEM0_POSTGRES_PASSWORD',
+  ]) {
     const value = process.env[name];
     if (value) message = message.split(value).join('[REDACTED]');
   }

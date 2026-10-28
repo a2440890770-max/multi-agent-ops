@@ -6,6 +6,8 @@
 
 当前交付为 **D1 工程骨架与 D2 技术验证入口**：三部分可同时启动、数据库开发环境、服务健康检测和 CI；另提供模型结构化输出、只读搜索、内嵌 Mem0 真实存储与检索的独立验证命令。尚未实现任务创建、任务执行、业务记忆治理、审批与发布。Agent 的 `shell` 状态只代表入口启动，不代表具备任务执行能力。
 
+最终七项技术基线见[技术选型](docs/architecture/stack-decisions.md)：Session / ops_session / 8 小时、DeepSeek + Claude Agent SDK、WebSearch/WebFetch、Drizzle + pg + SQL 迁移、进程内 Mem0 OSS、OpenAI 1536 维嵌入、同实例独立记忆库。登录与业务 Memory Manager 尚未实现。
+
 D2 尚未全部完成；Langfuse 按项目安排延后至主要业务流程完成后接入，微博能力仍待核查。当前完成项、真实验证边界及风险见 [D2 状态记录](docs/architecture/d2-status.md)。
 
 ## 环境前提
@@ -116,19 +118,22 @@ npm run search:verify -- --deny-search
 
 采用 `mem0ai/oss` TypeScript SDK，直接在 Agent 进程运行。PostgreSQL + pgvector 保存记忆正文、向量与元数据；SDK SQLite 保存记忆变更历史。这里没有单独的 Mem0 HTTP 服务或 Mem0 Cloud 账号。
 
-本机先启动 Ollama，并安装嵌入模型，再运行：
+先运行 `npm run env:setup` 启动共享 PostgreSQL，再执行：
 
 ```sh
-ollama pull nomic-embed-text
 npm run memory:setup
-npm run memory:verify -- --recreate-db
+npm run memory:check
+# 在 .env 或进程环境配置 OPENAI_API_KEY、DEEPSEEK_API_KEY 后：
+npm run memory:verify
 ```
 
-`memory:setup` 创建私有 `.env.memory`、独立 PostgreSQL 容器及数据卷，默认绑定 `127.0.0.1:55432`，不复用其他项目的 5432 端口。首次创建随机数据库密码，不覆盖已有配置；需要停库时运行 `npm run memory:down`，持久卷保留。进程环境优先于本地文件；记忆配置文件另于通用 `.env`，不会改写业务数据库配置。Mem0 构造配置仍需要已有的 `DEEPSEEK_API_KEY`。
+`memory:setup` 生成私有 `.env.memory`，在业务 PostgreSQL 同实例中创建独立记忆数据库和非超级用户角色，启用 pgvector；不创建第二个 PostgreSQL 容器。业务、记忆运行身份互相无连接权限，不使用管理身份。默认共用 `multi-agent-ops-dev_postgres_data` 持久卷，SQLite 历史另行持久化备份。
 
-验证使用合成文本，通过真实本地 `nomic-embed-text` 生成 768 维向量；检查 Mem0 写入、语义检索、用户隔离、PostgreSQL 实际记录、SQLite 实际历史、新进程读取与数据库容器重建后的读取。`infer:false` 明确跳过自动记忆提取，不发起 DeepSeek 请求，不将这项测试记为 Mem0 推理能力已验证。
+嵌入固定为 OpenAI 官方 `text-embedding-3-small` / 1536 维；`infer:false` 跳过 Mem0 自动提取，但仍会调用 OpenAI 并计费。旧 Ollama 768 维、独立实例的验证记录仅是历史证据，新方案的真实账号、中文检索和备份恢复需重新验证。
 
-默认报告位于被 Git 忽略的 `artifacts/memory/`。普通 `npm run check` 和 CI 不运行该真实验证、不启动 Ollama、不自动下载模型。具体接口用法、历史存储选择和风险见 [Mem0 接入说明](docs/architecture/memory.md)。
+旧环境切换前备份并阅读[迁移说明](docs/architecture/memory.md)，不要删除原卷或覆盖私有配置。重建共享容器会影响业务库，只有明确确认维护窗口时才运行 `CONFIRM_SHARED_DB_RECREATE=1 npm run memory:verify -- --recreate-db`。普通检查与 CI 不调用外部 API。
+
+业务 ORM 入口为 Drizzle + pg，使用 `npm run db:generate` 生成 SQL 并评审，再用 `npm run db:migrate` 应用；当前没有业务表，Mem0 私有表不由 Drizzle 管理。
 
 ## 已有本地目录切换方式
 
