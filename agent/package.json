@@ -18,7 +18,7 @@
     "@multi-agent-ops/shared": "0.1.0",
     "better-sqlite3": "12.10.0",
     "mem0ai": "3.3.1",
-    "ollama": "0.5.14",
+    "openai": "7.45.1",
     "pg": "8.22.0",
     "zod": "4.6.7"
   },

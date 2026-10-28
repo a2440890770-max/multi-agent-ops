@@ -1,5 +1,7 @@
 # 本地整合记录：D1 契约/页面与远程 D2
 
+本页保留 2026-10-27 的历史整合与验证记录。当前配置已按[最终七项技术选型](stack-decisions.md)调整：OpenAI 1536 维、同实例独立记忆库、Drizzle + pg + SQL 迁移；下述 Ollama、独立实例和“本次未推送”等描述只适用于原始整合，不是当前运行配置。最新修订见[选型统一记录](selection-alignment-2026-10-28.md)。
+
 日期：2026-10-27（Asia/Shanghai）。整合目标目录：`/data/unitree/multi-agent-ops-main`。本次只更新本地，不提交或推送远程仓库。
 
 ## 来源与比较方法

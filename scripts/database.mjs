@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { loadEnvironment, provisionDatabase, safeError } from './postgres-admin.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const env = fileURLToPath(new URL('../.env', import.meta.url));
@@ -29,4 +30,20 @@ const args = [
 ];
 if (action === 'up') args.push('-d', '--wait', '--wait-timeout', '120');
 const result = spawnSync('docker', args, { cwd: root, stdio: 'inherit' });
-process.exit(result.status ?? 1);
+process.exitCode = result.status ?? 1;
+
+if (result.status === 0 && action === 'up') {
+  loadEnvironment();
+  // Legacy .env files remain usable for health checks until explicitly migrated.
+  if (
+    process.env.DATABASE_URL &&
+    new URL(process.env.DATABASE_URL).username !== process.env.POSTGRES_USER
+  ) {
+    try {
+      await provisionDatabase(process.env.DATABASE_URL);
+    } catch (error) {
+      console.error(safeError(error));
+      process.exitCode = 1;
+    }
+  }
+}

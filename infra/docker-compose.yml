@@ -1,7 +1,7 @@
 name: multi-agent-ops-dev
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:0.8.7-pg16-bookworm@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?请先运行 npm run env:setup 生成 .env}
       POSTGRES_USER: ${POSTGRES_USER:?请先运行 npm run env:setup 生成 .env}

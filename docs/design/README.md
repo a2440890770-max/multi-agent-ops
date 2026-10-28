@@ -2,6 +2,8 @@
 
 2026-10-27，设计初稿，待共同评审；业务 AC 未验收。
 
+2026-10-28 已同步[最终七项技术选型](../architecture/stack-decisions.md)：保留 Session / ops_session / 8 小时；业务 ORM 为 Drizzle + pg + SQL 迁移，记忆嵌入改用 OpenAI 1536 维，业务/记忆库同实例隔离。页面仍为预览，登录和业务 Memory Manager 尚未实现。
+
 已在本地整合远程 `main` 的 D2 模型、搜索和 Mem0 技术验证入口。D1 页面/契约继续保留；D2 验证组件尚未接入业务工作流。整合来源与检查结果见 [本地整合记录](../architecture/local-integration-2026-10-27.md)。
 
 1. [接口契约说明](api-contract.md)：权限、并发、防重、错误、超时、审计、AC 与关键请求示例。
