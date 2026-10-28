@@ -13,6 +13,11 @@ const models = source.statements.find(
 );
 if (!models) throw new Error('ResponseModels missing');
 const schemas = {};
+// Reserve response-model names before visiting nested domain objects. Reusing a
+// name is safe only when it refers to the exact same TypeScript type.
+const schemaTypes = new Map(
+  models.members.map((member) => [member.name.text, checker.getTypeAtLocation(member)]),
+);
 function schema(type, inline = false) {
   if (type.flags & ts.TypeFlags.StringLiteral) return { type: 'string', enum: [type.value] };
   if (type.flags & ts.TypeFlags.NumberLiteral) return { type: 'number', enum: [type.value] };
@@ -41,6 +46,11 @@ function schema(type, inline = false) {
       symbol.declarations?.some((d) => d.getSourceFile().fileName.startsWith(`${root}shared/`))
     ) {
       const name = checker.typeToString(type).replace(/[^A-Za-z0-9_]/g, '_');
+      if (schemaTypes.has(name) && schemaTypes.get(name) !== type)
+        throw new Error(
+          `Schema name collision: ${name}. Give response wrappers and domain records distinct names.`,
+        );
+      schemaTypes.set(name, type);
       if (!schemas[name]) {
         schemas[name] = {};
         schemas[name] = schema(type, true);

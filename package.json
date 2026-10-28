@@ -9,8 +9,8 @@
     "npm": ">=11.9.0 <12"
   },
   "scripts": {
-    "contract:generate": "node scripts/export-contract.mjs && npm run build --workspace=shared && node scripts/document-contract.mjs && npm run build --workspace=shared",
-    "contract:check": "node scripts/export-contract.mjs --check && npm run build --workspace=shared && node scripts/document-contract.mjs --check",
+    "contract:generate": "node scripts/export-contract.mjs && node --import tsx scripts/document-contract.mjs && npm run build --workspace=shared",
+    "contract:check": "node scripts/export-contract.mjs --check && npm run build --workspace=shared && node --import tsx scripts/document-contract.mjs --check",
     "dev": "npm run build --workspace=shared && concurrently --kill-others --names shared,frontend,backend,agent \"npm run dev --workspace=shared\" \"npm run dev --workspace=frontend\" \"npm run dev --workspace=backend\" \"npm run dev --workspace=agent\"",
     "db:up": "node scripts/database.mjs up",
     "db:down": "node scripts/database.mjs down",
@@ -45,6 +45,7 @@
     "globals": "^17.0.0",
     "pg": "^8.16.0",
     "prettier": "^3.6.0",
+    "tsx": "4.23.15",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.0",
     "zod": "4.6.7"

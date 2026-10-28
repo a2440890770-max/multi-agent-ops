@@ -131,7 +131,7 @@ X-CSRF-Token: <session-token>
 {"expectedRevision":12,"baseContentVersionId":"version-3","body":"编辑后的原样正文"}
 ```
 
-成功新版本、revision、批准失效和审计必须一起提交，返回 201 SaveContent；前端显示“新版本已保存，需要提交审核”。另一成员以旧 revision 或基版保存应 409，无覆盖、无新版本、输入保留。批准成功后仅返回 Approval，发布必须另 POST，绝不在批准处理中调用外部平台。
+成功新版本、revision、批准失效和审计必须一起提交，返回 201 SaveContent；前端显示“新版本已保存，需要提交审核”。另一成员以旧 revision 或基版保存应 409，无覆盖、无新版本、输入保留。批准成功后返回 ApprovalResult（包含 Approval 记录和 TaskDetail），发布必须另 POST，绝不在批准处理中调用外部平台。响应包装与领域记录使用不同的 Schema 名称，线上 JSON 仍为 `{ data: { approval, task }, meta }`。
 
 | AC  | 契约与设计覆盖                               | 后续业务验收证据（D1 未执行）      |
 | --- | -------------------------------------------- | ---------------------------------- |

@@ -524,7 +524,7 @@ export const endpoints: readonly Endpoint[] = [
       accountId: id,
       contentHash: publish.contentHash!,
     }),
-    response: 'Approval',
+    response: 'ApprovalResult',
     success: 201,
     conditions: `${taskRules}审核 pass 或合法主观裁决；无未解决阻断；允许批准自己的文案；同版本有效批准已存在则 200 返回已有批准。`,
     transitions: ['A03', 'A04', 'A07'],

@@ -316,7 +316,7 @@ export interface OperationResponses {
   getReview: ResponseModels['Review'];
   stopReview: ResponseModels['TaskDetail'];
   decideReview: ResponseModels['Decision'];
-  approveContent: ResponseModels['Approval'];
+  approveContent: ResponseModels['ApprovalResult'];
   publishContent: ResponseModels['Publication'];
   listPublications: ResponseModels['Publications'];
   getPublication: ResponseModels['Publication'];

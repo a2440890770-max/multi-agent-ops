@@ -18,3 +18,5 @@
 `npm run contract:generate` 同步响应 Schema 和逐项参考；`npm run check` 检查生成物、格式、类型、后端测试及构建；`npm run test:e2e` 验证浏览器导航、锁定与冲突展示。设计评审和真实业务验收分别记录，不把占位测试通过等同于 AC-01—AC-14 通过。
 
 2026-10-28 选型同步后验证：`npm run check`（契约一致性、格式、Lint、类型、后端 5 项、Agent 21 项及全部构建）通过；`npm run test:e2e` 的 5 项浏览器测试通过。新 OpenAI 配置尚未做真实账号/中文召回验收，不能沿用旧 Ollama 报告。
+
+2026-10-28 契约评审修复：批准响应包装改名为 `ApprovalResult`，领域记录保留 `Approval`，接口 JSON 结构不变；重新生成响应 Schema、请求/响应类型和接口参考。生成器拒绝不同类型占用同一个 Schema 名称，并直接读取源码生成，避免旧编译产物阻塞类型改名。新增 3 项回归测试，验证公开 OpenAPI 的 200/201 批准响应、非法记录拒绝及独立领域记录；`npm run check`（后端 8 项、Agent 21 项）和 5 项浏览器测试通过。

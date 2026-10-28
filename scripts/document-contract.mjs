@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { format } from 'prettier';
-import { endpoints, getOpenApiDocument } from '../shared/dist/index.js';
+import { endpoints, getOpenApiDocument } from '../shared/src/index.ts';
 
 const spec = getOpenApiDocument();
 const schemas = spec.components.schemas;

@@ -1017,7 +1017,7 @@ JSON 请求体（未列字段拒绝）：
 | accountId        | 是   | string  | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
 | contentHash      | 是   | string  | 匹配 ^[a-f0-9]{64}$                     |
 
-成功：HTTP 201（已有有效批准时 200），`{ data: Approval, meta: { requestId, replayed } }`。data 字段：
+成功：HTTP 201（已有有效批准时 200），`{ data: ApprovalResult, meta: { requestId, replayed } }`。data 字段：
 
 | 字段     | 类型       | 含义                                                |
 | -------- | ---------- | --------------------------------------------------- |
