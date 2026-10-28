@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import type { AgentHealth, DatabaseReadiness, ServiceHealth } from '@multi-agent-ops/shared';
+import { registerContractRoutes } from './contract-routes.js';
 
 type Dependencies = {
   checkDatabase: () => Promise<DatabaseReadiness>;
@@ -7,7 +8,13 @@ type Dependencies = {
 };
 
 export function createApp(dependencies: Dependencies) {
-  const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
+  const app = Fastify({
+    logger: {
+      redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-csrf-token"]'],
+    },
+    ajv: { customOptions: { removeAdditional: false, coerceTypes: 'array' } },
+  });
+  registerContractRoutes(app);
   app.get('/api/health', async (): Promise<ServiceHealth> => ({
     service: 'backend',
     status: 'ok',
