@@ -16,3 +16,5 @@
 运行 `npm run dev` 后打开 `/tasks` 查看设计；`/` 继续进行真实服务健康检测。`/tasks/task-demo` 支持状态与异常场景预览；所有预览数据和身份切换均不产生业务副作用。`GET /api/v1/openapi.json` 可读取完整机器契约。业务占位接受结构校验后的合法请求返回 501，不能用于实际任务、登录或发布。
 
 `npm run contract:generate` 同步响应 Schema 和逐项参考；`npm run check` 检查生成物、格式、类型、后端测试及构建；`npm run test:e2e` 验证浏览器导航、锁定与冲突展示。设计评审和真实业务验收分别记录，不把占位测试通过等同于 AC-01—AC-14 通过。
+
+2026-10-28 选型同步后验证：`npm run check`（契约一致性、格式、Lint、类型、后端 5 项、Agent 21 项及全部构建）通过；`npm run test:e2e` 的 5 项浏览器测试通过。新 OpenAI 配置尚未做真实账号/中文召回验收，不能沿用旧 Ollama 报告。
