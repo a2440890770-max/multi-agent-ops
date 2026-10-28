@@ -1,23 +1,44 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import pg from 'pg';
-import { Ollama } from 'ollama';
+import OpenAI from 'openai';
+import { createHash } from 'node:crypto';
 import { buildMemorySdkConfig, readMemoryConfig } from './memory-config.js';
+
+export function assertEmbeddingVector(
+  vector: number[] | undefined,
+  dimension: number,
+): asserts vector is number[] {
+  if (
+    !vector ||
+    vector.length !== dimension ||
+    vector.some((n) => !Number.isFinite(n)) ||
+    !vector.some((n) => n !== 0)
+  )
+    throw new Error('真实嵌入结果缺失、无效或维度不匹配。');
+}
 
 export async function checkMemoryInfrastructure(env: NodeJS.ProcessEnv = process.env) {
   const config = readMemoryConfig(env);
-  const ollama = new Ollama({ host: config.ollamaUrl });
-  const models = await ollama.list();
-  const modelInfo = models.models.find((item) => item.name === `${config.model}:latest`);
-  if (!modelInfo)
-    throw new Error(`本机未安装 ${config.model}；请先运行 ollama pull ${config.model}。`);
-  const embedded = await ollama.embed({
-    model: config.model,
-    input: 'D2 embedding dimension probe',
+  const openai = new OpenAI({
+    apiKey: config.apiKey,
+    baseURL: config.embeddingBaseUrl,
+    maxRetries: 0,
+    timeout: 15000,
   });
-  const vector = embedded.embeddings[0];
-  if (!vector || vector.length !== config.dimension || vector.some((n) => !Number.isFinite(n)))
-    throw new Error('真实嵌入结果缺失或维度不匹配。');
+  const embedded = await openai.embeddings.create({
+    model: config.model,
+    dimensions: config.dimension,
+    input: 'D2 中文嵌入维度验证',
+    encoding_format: 'float',
+  });
+  const vector = embedded.data[0]?.embedding;
+  assertEmbeddingVector(vector, config.dimension);
+  const fingerprint = createHash('sha256')
+    .update(
+      JSON.stringify(['openai', config.embeddingBaseUrl, config.model, config.dimension, 'v1']),
+    )
+    .digest('hex');
   const client = new pg.Client({
     connectionString: config.databaseUrl,
     connectionTimeoutMillis: 5000,
@@ -25,17 +46,18 @@ export async function checkMemoryInfrastructure(env: NodeJS.ProcessEnv = process
   try {
     await client.connect();
     const available = await client.query(
-      "SELECT default_version FROM pg_available_extensions WHERE name = 'vector'",
+      "SELECT extversion AS default_version FROM pg_extension WHERE extname = 'vector'",
     );
-    if (!available.rowCount) throw new Error('PostgreSQL 未安装 pgvector 扩展文件。');
+    if (!available.rowCount)
+      throw new Error('记忆数据库未启用 vector 扩展；请运行 npm run memory:setup。');
     await client.query('BEGIN');
     await client.query("SELECT pg_advisory_xact_lock(hashtext('multi-agent-ops-mem0-profile'))");
-    await client.query(`CREATE TABLE IF NOT EXISTS mem0_embedding_profiles (
+    await client.query(`CREATE TABLE IF NOT EXISTS mem0_embedding_profiles_v2 (
       collection_name TEXT PRIMARY KEY, model TEXT NOT NULL,
-      dimension INTEGER NOT NULL, model_digest TEXT NOT NULL
+      dimension INTEGER NOT NULL, config_fingerprint TEXT NOT NULL
     )`);
     const profile = await client.query(
-      'SELECT model, dimension, model_digest FROM mem0_embedding_profiles WHERE collection_name = $1',
+      'SELECT model, dimension, config_fingerprint FROM mem0_embedding_profiles_v2 WHERE collection_name = $1',
       [config.collectionName],
     );
     const existing = profile.rows[0];
@@ -43,9 +65,9 @@ export async function checkMemoryInfrastructure(env: NodeJS.ProcessEnv = process
       existing &&
       (existing.model !== config.model ||
         existing.dimension !== config.dimension ||
-        existing.model_digest !== modelInfo.digest)
+        existing.config_fingerprint !== fingerprint)
     )
-      throw new Error('已有集合的嵌入模型、维度或模型摘要不同；请使用新集合并迁移数据。');
+      throw new Error('已有集合的嵌入模型、维度或配置指纹不同；请使用新集合并迁移数据。');
     const column = await client.query(
       `SELECT format_type(a.atttypid, a.atttypmod) AS type
        FROM pg_attribute a JOIN pg_class c ON a.attrelid = c.oid
@@ -58,15 +80,15 @@ export async function checkMemoryInfrastructure(env: NodeJS.ProcessEnv = process
     if (column.rowCount && column.rows[0].type !== `vector(${config.dimension})`)
       throw new Error('PostgreSQL 向量列维度与配置不一致。');
     await client.query(
-      `INSERT INTO mem0_embedding_profiles VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-      [config.collectionName, config.model, config.dimension, modelInfo.digest],
+      `INSERT INTO mem0_embedding_profiles_v2 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+      [config.collectionName, config.model, config.dimension, fingerprint],
     );
     await client.query('COMMIT');
     return {
-      embeddingProvider: 'ollama-local',
+      embeddingProvider: 'openai',
       embeddingModel: config.model,
       embeddingDimension: vector.length,
-      modelDigest: modelInfo.digest,
+      configurationFingerprint: fingerprint,
       pgvectorAvailableVersion: available.rows[0].default_version as string,
     };
   } catch (error) {

@@ -27,7 +27,7 @@ const report: Record<string, unknown> = {
   containerRecreationRequested: values['recreate-db'],
   containerRecreationPassed: false,
   scope:
-    'Real local embeddings + PostgreSQL/pgvector + SDK SQLite history; synthetic text; infer:false. Business governance and model extraction are not covered.',
+    'Real OpenAI embeddings + PostgreSQL/pgvector + SDK SQLite history; synthetic text; infer:false. Business governance and model extraction are not covered.',
 };
 const worker = fileURLToPath(new URL('./verify-memory-worker.ts', import.meta.url));
 async function runPhase(phase: 'write' | 'reopen', label: string, previous?: string) {
@@ -59,7 +59,7 @@ try {
       encoding: 'utf8',
       timeout: 60000,
     });
-    if (result.status !== 0) throw new Error('记忆数据库容器重建失败；不将重建检查标记通过。');
+    if (result.status !== 0) throw new Error('共享数据库容器重建失败；不将重建检查标记通过。');
     await runPhase('reopen', 'afterContainerRecreation', initial);
     report.containerRecreationPassed = true;
   }

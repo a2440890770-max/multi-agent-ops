@@ -28,20 +28,24 @@
     "memory:up": "node scripts/memory-database.mjs up",
     "memory:down": "node scripts/memory-database.mjs down",
     "memory:recreate": "node scripts/memory-database.mjs recreate",
-    "memory:verify": "npm run memory:verify --workspace=agent --"
+    "memory:verify": "npm run memory:verify --workspace=agent --",
+    "db:generate": "npm run db:generate --workspace=backend",
+    "db:migrate": "npm run db:migrate --workspace=backend",
+    "memory:check": "node scripts/check-memory-database.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.64.1",
     "@types/node": "^24.0.0",
+    "concurrently": "10.0.6",
     "eslint": "10.13.0",
     "eslint-config-prettier": "^10.1.0",
     "globals": "^17.0.0",
+    "pg": "^8.16.0",
     "prettier": "^3.6.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.0",
-    "pg": "^8.16.0",
-    "concurrently": "10.0.6"
+    "zod": "4.6.7"
   },
   "workspaces": [
     "shared",

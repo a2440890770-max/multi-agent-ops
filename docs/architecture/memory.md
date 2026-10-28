@@ -1,87 +1,76 @@
-# D2 Mem0 内嵌接入
+# Mem0 内嵌接入与共享 PostgreSQL
 
-## 运行与存储
+当前基线见 [最终七项技术选型](stack-decisions.md)。2026-10-28 起使用 OpenAI 官方嵌入和同实例独立记忆数据库；2026-10-27 的 Ollama/独立实例报告保留为历史证据，不代表新方案的真实 API 验收。
 
-Mem0 OSS TypeScript SDK 直接嵌入 Agent。入口是 `agent/src/memory.ts` 的异步 `createProjectMemory()`；无需 Mem0 Cloud Key，不部署 Mem0 HTTP 服务。普通健康检查保持 D1 空壳行为。
+## 组件与职责
 
-| 组件       | 锁定选择                                                                       | 保存内容                                   |
-| ---------- | ------------------------------------------------------------------------------ | ------------------------------------------ |
-| Mem0 SDK   | `mem0ai@3.3.1`，入口 `mem0ai/oss`                                              | 在 Agent 进程执行记忆操作                  |
-| PostgreSQL | PostgreSQL 16，`pgvector/pgvector:0.8.7-pg16-bookworm`，镜像摘要锁定在 Compose | 正文、768 维向量、元数据及嵌入配置锁定记录 |
-| 嵌入模型   | 本机 Ollama `nomic-embed-text`，768 维                                         | 在本机把文本编码成向量                     |
-| 历史存储   | Mem0 自带 SQLite，`better-sqlite3@12.10.0`                                     | Mem0 ADD/UPDATE/DELETE 等变更历史          |
-| Node 驱动  | `pg@8.22.0`、`ollama@0.5.14`                                                   | 访问上述真实组件                           |
+| 组件                | 当前选择                                                            | 保存内容/职责                                     |
+| ------------------- | ------------------------------------------------------------------- | ------------------------------------------------- |
+| Mem0                | `mem0ai@3.3.1`，`mem0ai/oss`，内嵌 Agent Node 进程                  | 显式写入、检索、更新、删除的技术能力              |
+| 业务 Memory Manager | 自研 TypeScript，尚未实现                                           | 权限、候选/确认状态、版本、禁用删除及同步治理     |
+| 嵌入                | OpenAI 官方 `text-embedding-3-small`，1536 维                       | 发送文本生成向量，需要 `OPENAI_API_KEY`，产生费用 |
+| PostgreSQL          | PostgreSQL 16 + pgvector，镜像摘要锁定在 `infra/docker-compose.yml` | 同实例的独立业务库和记忆库；共享持久卷            |
+| SQLite              | Mem0 历史，`better-sqlite3@12.10.0`                                 | SDK ADD/UPDATE/DELETE 历史；不替代业务审计        |
 
-历史持久化是 D2 要求；使用 SQLite 是本次经用户确认的实现选择，并非 PRD 强制规定。SDK 历史不是业务审批、版本、确认人或操作审计的完整实现。PRD 4.6 所需的 Memory Manager、状态治理及同步失败处理仍需后续完成。
+不部署 Mem0 HTTP 服务，不使用 Mem0 Cloud。默认业务库 `agent_ops`、业务运行角色 `agent_ops`；记忆库 `multi_agent_memory`、运行角色 `agent_memory`；初始化管理身份 `agent_ops_admin`。运行角色均非超级用户，各库撤销 PUBLIC CONNECT，互相不得连接。管理身份仅用于显式初始化、扩展与运维，不进入 Agent 配置。
 
-SDK 原生历史提供方为 SQLite、Supabase、内存；本次显式启用 SQLite，不使用临时内存历史。默认文件 `artifacts/memory/history.sqlite`，可通过 `MEM0_HISTORY_PATH` 指定仓库内或部署持久目录。部署和备份必须同时覆盖 PostgreSQL 持久卷及 SQLite 文件；不能只备份向量库。
-
-SDK 在动态导入前关闭 `MEM0_TELEMETRY`，通过 `MEM0_DIR` 将身份/提示配置约束到当前仓库的 `artifacts/memory/sdk/`。这些数据和 `.env.memory` 均已被 Git 忽略。不创建用户主目录中的 Mem0 配置。
-
-## 初始化与使用
+## 首次配置
 
 ```sh
 npm ci
-ollama pull nomic-embed-text
+npm run env:setup
 npm run memory:setup
-npm run memory:verify -- --recreate-db
+npm run memory:check
 ```
 
-官方 DeepSeek Key 放在进程环境或已有 `.env`，不写入代码或报告。专用 `.env.memory` 保存记忆数据库随机凭据、嵌入模型、维度、集合与本地 Ollama 地址。通用业务 `DATABASE_URL` 不作为记忆地址的回退项。
+`env:setup` 生成不覆盖已有文件的私有 `.env`，启动共享 PostgreSQL，创建独立业务角色和数据库。`memory:setup` 创建私有 `.env.memory`、随机记忆密码，并在同一 PostgreSQL 服务中创建记忆数据库、非超级用户和 `vector` 扩展；此步骤不调用外部 API。
 
-Compose 项目 `multi-agent-ops-memory` 在 `127.0.0.1:55432` 启动独立 PostgreSQL 实例，数据库名 `agent_memory`，卷名 `multi-agent-ops-memory_memory_postgres_data`；它仍然是 PostgreSQL。当前另一份本地项目占用 5432，因此这里避免共用实例或改动其配置。若运行多份当前项目副本，需要分别配置 Compose 项目名、端口和数据卷。
+在 `.env` 或进程环境中设置 `OPENAI_API_KEY` 和已有 `DEEPSEEK_API_KEY`。不使用 `VITE_*` 保存服务端凭据。`.env.memory` 不包含 OpenAI Key；进程环境优先于文件。普通启动、检查和 CI 不发起嵌入、模型或搜索调用。
 
-SDK 使用方式示意（未来业务写入前仍须完成状态、来源与权限校验）：
+```sh
+npm run memory:verify
+# 仅在本地测试环境/维护窗口，明确接受共享实例短暂中断时：
+CONFIRM_SHARED_DB_RECREATE=1 npm run memory:verify -- --recreate-db
+```
+
+容器重建会同时中断业务库和记忆库，因此脚本要求上述显式开关；不会删除持久卷。`memory:up` 使用同一个 Compose 服务，`memory:down` 会拒绝执行并提示使用影响明确的 `db:down`。已移除创建第二实例的 `infra/memory-compose.yml`。
+
+## 嵌入和模型调用
+
+`agent/src/memory-config.ts` 固定官方 OpenAI 地址、模型及 1536 维；环境中的自定义 OpenAI 网关不覆盖此地址。旧 Ollama 变量、旧独立端口、不同模型/维度拒绝启动，配置失败不静默降级。
+
+初始化先调用官方嵌入接口，确认向量维度、有限数值及非零内容，再检查记忆库已经启用 `vector`。`mem0_embedding_profiles_v2` 记录集合、模型、维度和配置指纹；这不是供应商底层模型权重摘要，也不保证模型别名永远不变。已有无新配置记录的向量表拒绝直接接管，避免混写旧模型向量。
+
+默认新集合 `mem0_ops_openai_small_v1`。写入与查询使用同一模型、维度和预处理配置。未来修改模型时必须使用新集合、重新嵌入、验证后切换，不能仅更改向量列维度。
+
+Agent 推理仍通过 Claude Agent SDK 调用 DeepSeek。Mem0 构造配置仍需 DeepSeek Key；当前验证与示例使用 `infer:false`，不调用 Mem0 的 LLM，也不自动提取或合并记忆，但会调用 OpenAI 生成嵌入。未来 `infer:true` 的 Mem0 原生 DeepSeek Chat Completions 路径尚未验证；如需统一经 Agent SDK 提取，应先生成候选，经业务确认后显式写入。
 
 ```ts
-import { createProjectMemory } from './memory.js';
-
 const memory = await createProjectMemory();
-const scope = 'team-example:weibo-example';
 await memory.add('仅作技术示例的已确认偏好', {
-  userId: scope,
+  userId: 'team-example:weibo-example',
   infer: false,
   metadata: { source: 'technical-example' },
 });
-const found = await memory.search('账号有什么偏好？', {
-  filters: { user_id: scope },
-  topK: 3,
-});
 ```
 
-此处 scope 演示技术隔离，不代替从已认证身份确定团队/账号范围。没有新增业务 HTTP 接口、页面或自动上下文注入。
+示例 scope 不代替认证授权；业务 Memory Manager 完成前不接入真实业务上下文。
 
-## 模型调用边界
+## 已有环境迁移
 
-Agent 的推理仍使用已验证的 Claude Agent SDK → DeepSeek 官方 Anthropic 兼容接口。
+1. 先备份业务库、旧独立记忆库和 SQLite 历史；记录旧 Compose 项目/卷/端口。不要删除旧卷，不覆盖 `.env` / `.env.memory`，不要同时运行两个服务写同一卷。
+2. 现有业务 Compose 仍使用原服务名、项目名和 `postgres_data` 卷。升级前在卷副本上验证锁定的 PostgreSQL 16 + pgvector 镜像兼容性和恢复；确认后在维护窗口切换镜像。脚本不会为启用扩展而删卷。
+3. 旧 `.env` 的 `POSTGRES_USER` 可能也是业务超级用户。保留其作为显式管理身份，由管理员创建新的非超级用户业务角色，并迁移已有对象所有权/授权，再更新 `DATABASE_URL`。初始化脚本拒绝接管归属不同的已有数据库，也不会自动降权或重设已有角色密码。确认业务库所有权与新业务角色一致后再执行 setup。
+4. 将旧 `.env.memory` 安全备份到 Git 忽略位置，再生成或手动配置新文件：与 `DATABASE_URL` 相同主机端口、不同数据库和角色，移除 `MEM0_POSTGRES_PORT` / `MEM0_OLLAMA_URL`，使用 OpenAI 模型、1536 维及新集合。保留原 SQLite 历史，历史中旧记忆 ID 不等于新索引已同步。
+5. 从权威业务记录或经核实的旧记忆正文重新生成 1536 维向量，验证来源、隔离、召回和数量后切换。旧 768 维向量不能转换或混入新集合；本次不提供无审查的一键数据迁移。
+6. 运行 `memory:check` 验证实际跨库连接被拒、非超级用户和扩展；完成真实 OpenAI/中文检索与备份恢复验证后再上线。
 
-Mem0 初始化要求提供 LLM 配置，即使调用 `add(..., { infer:false })`。因此配置中仍显式选择 DeepSeek 官方模型与官方地址，避免默认 OpenAI。当前测试与示例均使用 `infer:false`，真实生成嵌入、存储正文、检索向量，但不让 Mem0 自动提取/修改记忆，也不调用该 LLM。
+## 持久化与验收
 
-若未来启用 Mem0 原生 `infer:true`，其内置 DeepSeek provider 会调用官方 Chat Completions，不经过 Claude Agent SDK；该路径本次未验证。若要坚持所有提取经过 Claude Agent SDK，应由现有结构化调用产生候选，经过业务确认后再以 `infer:false` 写入 Mem0。不得把候选自动启用。
+PostgreSQL 数据在 `multi-agent-ops-dev_postgres_data`；SQLite 默认 `artifacts/memory/history.sqlite`，可用 `MEM0_HISTORY_PATH` 指向受控持久目录。备份和恢复需同时覆盖业务库、记忆库及 SQLite，之后重新核对版本和同步状态。
 
-## 嵌入配置锁定
+`memory:verify` 使用合成文本但真实调用 OpenAI，检查 SDK 写入、语义检索、范围隔离、独立 SQL/SQLite、新进程读取；可选重建共享容器后再读取。报告写入 Git 忽略的 `artifacts/memory/`，不覆盖旧证据。未配置账号/额度/网络时失败，不生成假向量或声称接通；单元测试和不付费的数据库检查不能替代真实嵌入和中文召回验收。
 
-初始化前先确认模型已在本机安装，并通过真实 embedding 调用验证维度。缺少模型时失败，不由 SDK 静默下载或更换模型。连接 PostgreSQL 时检查 pgvector 可用性；以 `mem0_embedding_profiles` 记录集合、模型、维度和实际 Ollama 模型摘要，重开时比对，避免混用同维度的不同模型。已有无锁定记录的向量表也拒绝直接接管。
+Mem0 3.3.1 无公开 `Memory.close()`，验证器继续使用隔离子进程释放连接；关闭遥测并将 SDK 身份文件限制在仓库的受控目录。依赖风险按实际 `npm audit` 处理，不为消除报告强制降级所锁 Mem0。
 
-默认集合 `mem0_ops_nomic_v1`。若切换 `bge-m3`，需先安装模型，配置 1024 维并选择新集合；历史数据应重新生成向量和迁移，不能直接更改旧向量列。当前选择用于 D2 技术连通性验证，不代表已证明中文业务检索质量。
-
-## 验收与限制
-
-`npm run memory:verify` 使用合成文本但不模拟嵌入、数据库或检索。所有阶段失败返回非零退出码，报告不覆盖旧文件。
-
-1. 通过 SDK 写入目标偏好、无关干扰记忆和另一用户范围的记录。
-2. 使用不同表述查询，要求第一条结果是目标记忆；空用户范围必须返回空结果。
-3. 通过独立 PostgreSQL 连接核对正文、范围、实际向量维度和非零向量。
-4. 分别使用 SDK `history()` 与独立 SQLite 读取核对 ADD 历史。
-5. 退出写入进程，以新进程读取原记忆和历史，不重新写入。
-6. 加上 `--recreate-db` 时重建专用 PostgreSQL 容器，再使用新进程读取；不删除数据卷。
-
-真实报告记录运行时间、进程 ID、记忆 ID、维度、检索分数与历史行数，不记录模型 Key 或数据库密码。测试数据保留在专用测试范围中，未添加一键清库脚本。
-
-SDK 3.3.1 没有公开的 `Memory.close()`；验证器使用隔离子进程，报告和同步 SQLite 写入完成后退出，由进程释放 SDK 的数据库连接。当前不使用私有字段、全局 factory 替换或修改 `node_modules`。
-
-锁定环境安装时 `npm audit` 报告 3 项 high，来自 Mem0 内部 Zod 3 及其依赖链；推荐的自动修复会降级 Mem0 到 1.x，未擅自执行。接入阶段仅使用受限配置与合成测试数据；上线前应跟踪上游兼容修复、评估受影响输入路径并消除风险。没有用跨主版本强制覆盖来声称已修复。
-
-Mem0 的 OpenAI 依赖带入 Node 18 类型声明，因此 Agent 的 TypeScript `typeRoots` 显式使用工作区根目录的 Node 24 类型；不更改模型客户端的运行时版本或强制覆盖上游依赖。
-
-官方参考：[Mem0 仓库](https://github.com/mem0ai/mem0)、[Node SDK](https://docs.mem0.ai/open-source/node-quickstart)、[配置说明](https://docs.mem0.ai/open-source/configuration)。实际兼容性以本次锁定 npm 包源码及真实运行结果为准。
+官方依据：[OpenAI 嵌入接口](https://developers.openai.com/api/reference/typescript/resources/embeddings/methods/create)、[Mem0 Node SDK](https://docs.mem0.ai/open-source/node-quickstart)、[pgvector](https://github.com/pgvector/pgvector)。
