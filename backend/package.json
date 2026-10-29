@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "node ../scripts/migrations.mjs migrate"
   },
   "dependencies": {
     "@multi-agent-ops/shared": "0.1.0",

@@ -2,7 +2,7 @@
 
 原始记录日期：2026-10-27（Asia/Shanghai）；选型更新日期：2026-10-28。
 
-当前基线见[最终七项技术选型](stack-decisions.md)。模型和搜索配置保持不变；下表的 Ollama/独立记忆实例结果为历史证据。现已改为 OpenAI text-embedding-3-small / 1536 维及共享 PostgreSQL 实例中的独立记忆数据库；代码和不付费检查不代替新配置的真实嵌入、中文召回及恢复验收。Session 登录与业务 Memory Manager 仍未实现，Drizzle 已有基础入口，业务表迁移待后续完成。本阶段尚未全部完成，不能将技术验证入口描述为业务工作流已实现。
+当前基线见[最终七项技术选型](stack-decisions.md)。模型和搜索配置保持不变；下表的 Ollama/独立记忆实例结果为历史证据。现已改为 OpenAI text-embedding-3-small / 1536 维及共享 PostgreSQL 实例中的独立记忆数据库；代码和不付费检查不代替新配置的真实嵌入、中文召回及恢复验收。D3 已实现 Session 登录、前端身份恢复及业务接口权限校验，业务 Memory Manager 仍未实现。D3 已补充 Drizzle 业务表定义、初始 SQL 和已有表基线接管，见[迁移说明](../../backend/drizzle/README.md)；表结构就绪不代表业务持久化接口已实现。本阶段尚未全部完成，不能将技术验证入口描述为业务工作流已实现。
 
 ## 历史已验证范围（不可跨配置沿用）
 

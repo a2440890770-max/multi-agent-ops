@@ -181,42 +181,6 @@ export function CreateTask() {
   );
 }
 
-export function Login() {
-  return (
-    <>
-      <PageTitle
-        eyebrow="TEAM ACCESS"
-        title="成员入口"
-        description="使用团队成员身份进入工作区，操作权限由服务端校验。"
-      />
-      <section className="panel form-panel narrow">
-        <h2>登录团队</h2>
-        <label>
-          登录账号
-          <input autoComplete="username" placeholder="团队成员账号" />
-        </label>
-        <label>
-          密码
-          <input type="password" autoComplete="current-password" placeholder="请输入密码" />
-        </label>
-        <PendingButton>登录</PendingButton>
-        <Notice>
-          登录方案为契约初稿，尚未接入真实会话。凭据错误、会话过期和成员禁用将在这里明确提示。
-        </Notice>
-        <div className="section-divider" />
-        <h3>成员与权限</h3>
-        <p className="muted">
-          运营人员可创建、审核批准、发布、管理业务记忆和参与评测。成员、授权及规则配置仅管理员可修改。
-        </p>
-        <PendingButton>退出当前会话</PendingButton>
-        <a className="text-link" href="/tasks">
-          进入页面设计预览 →
-        </a>
-      </section>
-    </>
-  );
-}
-
 const memories = [
   {
     id: 'memory-1',
@@ -480,9 +444,9 @@ export function Settings({ role }: { role: Role }) {
       {role !== 'admin' ? (
         <>
           <Notice tone="warning">
-            无管理权限。当前预览身份为运营人员；成员、账号授权及配置仅管理员可访问。
+            无管理权限。当前登录身份为运营人员；成员、账号授权及配置仅管理员可访问。
           </Notice>
-          <Empty title="此页面仅管理员可用">可通过侧栏的预览身份查看管理员布局。</Empty>
+          <Empty title="此页面仅管理员可用">如需管理成员或配置，请联系团队管理员。</Empty>
         </>
       ) : (
         <section className="panel">

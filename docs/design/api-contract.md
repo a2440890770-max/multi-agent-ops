@@ -10,7 +10,7 @@
 - `shared/src/generated/request-models.ts` 从请求 Schema 自动生成 OperationBodies/Queries/Params/Responses，前后端均可按 operationId 导入类型。`shared/src/responses.ts` 是响应映射；响应 JSON Schema 从 TypeScript 自动生成，不另维护后端 DTO。字段必填性和 null 含义以生成的 OpenAPI 为准。
 - [逐项接口参考](api-reference.md) 列出全部接口及字段。`GET /api/v1/openapi.json` 提供 OpenAPI 3.1 契约，`npm run contract:generate` 更新生成物，`npm run contract:check` 检查漂移。
 
-**当前实际能力：** 原有健康/就绪接口保留；新增业务路由执行请求结构校验后返回 `501 NOT_IMPLEMENTED`，不执行登录、状态机、存储、Agent 或外部发送。OpenAPI 描述后续业务实现目标，不代表这些能力已经实现。结构校验不等于权限和业务校验。以下认证、幂等持久化、审计、原子边界及异步恢复均是后续实现必须遵循的契约。
+**当前实际能力：** 保留健康/就绪接口；D3 已实现登录、当前身份及退出的服务端 Session 接口并接通前端，配置与验收见[认证说明](../infra/auth.md)。其他业务路由已统一接入会话、角色及写入 Origin/CSRF 校验；未登录返回 `401`、角色越权返回 `403`。通过后校验请求结构并返回 `501 NOT_IMPLEMENTED`，不执行任务状态机、Agent 或外部发送；成员和配置管理等业务处理尚待实现，整个 D3 尚未全部验收。下述其他业务幂等、审计、原子边界及异步恢复仍为后续实现契约。
 
 ## 通用 HTTP 与字段规则
 
@@ -31,7 +31,7 @@
 
 ## 认证和权限契约
 
-登录选型以[最终七项技术选型](../architecture/stack-decisions.md)为准，使用内部成员账号/口令 + 服务端会话：安全密码哈希，限速，统一凭据错误。登录尚未实现，需在 M1 完成安全与功能验收，D1 无默认账号、无开发绕过。生产 HTTPS，Cookie `ops_session` 为 HttpOnly、Secure、SameSite=Lax；本地仅安全标志可按 localhost 环境调整。会话绝对时长 8 小时；登出、成员禁用立即撤销。登录校验 Origin；其他写入需同源 Origin 和来自 `/auth/me` 的 `X-CSRF-Token`；读取不产生业务变更。接口不返回口令、API 密钥、微博令牌或授权安全引用。
+登录选型以[最终七项技术选型](../architecture/stack-decisions.md)为准，使用内部成员账号/口令 + 服务端会话：安全密码哈希，限速，统一凭据错误。D3 已实现三个认证接口，无默认账号或开发绕过；成员须显式初始化。生产 HTTPS，Cookie `ops_session` 为 HttpOnly、Secure、SameSite=Lax；本地仅安全标志可按 localhost 环境调整。会话绝对时长 8 小时；登出立即撤销，当前成员状态和认证版本每次复核。登录校验 Origin；退出等写入需同源 Origin 和来自 `/auth/me` 的 `X-CSRF-Token`；业务路由均已接入上述检查，认证先于正文解析及参数校验。读取不产生业务变更。接口不返回口令、API 密钥、微博令牌或授权安全引用。
 
 | 能力                                                   | 运营人员                 | 管理员 |
 | ------------------------------------------------------ | ------------------------ | ------ |
@@ -40,7 +40,7 @@
 | 成员管理、官方授权入口、完整基础配置查询/更新          | 禁止                     | 允许   |
 | 明文凭据读取                                           | 不提供                   | 不提供 |
 
-`/auth/me` 返回当前成员、权限、CSRF 和过期时间。操作始终由服务端校验角色及状态，前端 `actions` 仅作一致性展示提示。Langfuse 独立鉴权，业务角色不自动授予其权限。D1 身份切换只预览布局，不产生真实权限。
+`/auth/me` 返回当前成员、权限、CSRF 和过期时间。操作始终由服务端校验角色及状态，前端 `actions` 仅作一致性展示提示。Langfuse 独立鉴权，业务角色不自动授予其权限。前端当前身份由 /auth/me 获取，不提供预览身份切换。
 
 ## 幂等、并发和原子边界
 

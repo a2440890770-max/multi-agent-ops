@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { mockAuth } from './auth-fixture.js';
 
 test('工作台使用真实后端及 Agent 健康检查，并如实显示数据库状态', async ({ page, request }) => {
   await expect
@@ -45,7 +46,8 @@ test('移动端不出现横向溢出', async ({ page }) => {
   );
 });
 
-test('业务导航可直接刷新；管理布局按预览身份限制', async ({ page }) => {
+test('业务导航可直接刷新；管理布局使用后端返回的当前身份', async ({ page }) => {
+  const fixture = await mockAuth(page);
   await page.goto('/tasks');
   await expect(page.getByRole('heading', { name: '每一个想法，都有迹可循' })).toBeVisible();
   await page.screenshot({ path: 'test-results/d1-tasks-desktop.png', fullPage: true });
@@ -55,11 +57,13 @@ test('业务导航可直接刷新；管理布局按预览身份限制', async ({
   await expect(page.getByRole('heading', { name: '让经验有来源，也有边界' })).toBeVisible();
   await page.getByRole('link', { name: '管理设置', exact: true }).click();
   await expect(page.getByRole('heading', { name: '此页面仅管理员可用' })).toBeVisible();
-  await page.getByLabel('预览身份（非登录）').selectOption('admin');
+  fixture.state.role = 'admin';
+  await page.reload();
   await expect(page.getByRole('button', { name: '基础规则与版本' })).toBeVisible();
 });
 
 test('冲突保留输入；工作/发布锁和未保存输入阻断关键操作', async ({ page }) => {
+  await mockAuth(page);
   await page.goto('/tasks/task-demo');
   await page.screenshot({ path: 'test-results/d1-task-detail-desktop.png', fullPage: true });
   const editor = page.getByRole('textbox', { name: '当前文案', exact: true });
@@ -83,6 +87,7 @@ test('冲突保留输入；工作/发布锁和未保存输入阻断关键操作'
 });
 
 test('移动端业务页面保持导航且页面本身无横向溢出', async ({ page }) => {
+  await mockAuth(page);
   await page.setViewportSize({ width: 390, height: 844 });
   for (const route of [
     '/tasks',

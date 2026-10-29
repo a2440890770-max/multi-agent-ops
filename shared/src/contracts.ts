@@ -130,7 +130,7 @@ const verification = input(
   ],
 );
 
-/** All business endpoints are contract-only in D1; registered handlers return 501. */
+/** D3 authentication and business authorization are implemented; business handlers are stubs. */
 export const endpoints: readonly Endpoint[] = [
   endpoint({
     operationId: 'login',
@@ -142,10 +142,12 @@ export const endpoints: readonly Endpoint[] = [
     response: 'Session',
     success: 200,
     conditions:
-      '本地成员口令方案初稿；成员 active；统一凭据错误，不暴露账号存在性。成功设置 HttpOnly 会话 Cookie。',
+      '内部成员口令登录；成员 active；统一凭据错误，账号/IP 持久限流；可信 Origin；成功设置 HttpOnly 会话 Cookie，绝对有效 8 小时。',
     transitions: [],
     audit: 'auth.login（不含口令）',
     ac: ['AC-08'],
+    repetition:
+      '须 Idempotency-Key；凭据仍有效时同键同请求复用原会话，权限反映当前成员角色；同键不同请求 409；已退出、过期或撤销的会话不复活。重放材料仅加密持久化。',
   }),
   endpoint({
     operationId: 'logout',
@@ -930,7 +932,9 @@ export function getOpenApiDocument() {
         description: '取自 /auth/me，与会话绑定。',
       });
     const response = {
-      description: '业务实现后的成功响应；D1 占位仅返回 501。',
+      description: ['login', 'getMe', 'logout'].includes(e.operationId)
+        ? 'D3 认证接口成功响应；需要配置业务数据库和认证密钥。'
+        : '业务实现后的成功响应；当前先校验会话、角色及写入 Origin/CSRF，通过后返回 501 占位。',
       content: {
         'application/json': {
           schema: {
@@ -967,9 +971,12 @@ export function getOpenApiDocument() {
         : {}),
       responses,
       'x-roles': e.roles,
+      'x-authorization-implemented': true,
       'x-transitions': e.transitions,
       'x-ac': e.ac,
-      'x-implementation': 'contract-only',
+      'x-implementation': ['login', 'getMe', 'logout'].includes(e.operationId)
+        ? 'implemented'
+        : 'contract-only',
       'x-error-codes': e.errors,
     };
   }
@@ -978,7 +985,8 @@ export function getOpenApiDocument() {
     info: {
       title: 'Multi-Agent Ops D1 接口契约',
       version: '0.1.0',
-      description: '契约初稿，业务路由返回 501；不表示鉴权、数据库状态机或真实发布已实现。',
+      description:
+        'D3 已实现服务端 Session 登录、当前身份、退出及业务接口会话/角色/写入 Origin/CSRF 校验；权限通过后业务处理仍为 501 占位，状态机及真实发布尚未实现。',
     },
     paths,
     components: {
