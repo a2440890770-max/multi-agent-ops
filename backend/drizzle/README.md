@@ -2,7 +2,7 @@
 
 表定义位于 `backend/src/schema.ts`。`0000_d3_initial.sql` 对齐已有 D3 表：`teams`、`members`、`sessions`、`accounts`、`config_versions`、`audit_events`、`idempotency_records`，并保留原型 `tasks` 表。SQL、Drizzle 快照、迁移日志一起提交代码仓库，不提交本地数据或凭据。
 
-迁移负责建立结构和版本管理；D3 已接通管理员初始化、Session 登录与业务接口权限校验，见[认证说明](../../docs/infra/auth.md)。成员管理、配置和其他业务处理仍为占位。`tasks` 目前只是旧原型结构，含 `needs_human` 状态，不等于共享契约中的完整任务模型；后续需通过新迁移升级，不能删除旧数据后重建。
+迁移负责建立结构和版本管理；D3 已接通管理员初始化、Session 登录与业务接口权限校验，见[认证说明](../../docs/infra/auth.md)。成员管理、配置和其他业务处理仍为占位。`0001_d4_task_metadata.sql` 为 `tasks` 增加 `created_by`、`team_id`、`current_step`、`error_message`，以及两个外键和查询索引；旧任务的新增字段允许为空，不自动推断创建人或团队。任务仍含 `needs_human` 状态，不等于共享契约中的完整任务模型；后续需通过新迁移升级，不能删除旧数据后重建。
 
 ## 新环境
 
@@ -36,6 +36,25 @@ npm run db:migrate
 
 ## 后续结构变更
 
+### 已手动执行 D4 字段 SQL
+
+仅适用于已登记 D3 初始迁移、并已手动执行本次四字段 SQL 的数据库。先备份，再运行：
+
+```sh
+npm run db:status
+npm run db:adopt
+npm run db:migrate
+npm run db:status
+```
+
+`db:adopt` 只接管下一个待应用版本。它校验现有迁移历史、该版本 SQL 哈希及对应的 `0001_d4_task_metadata.catalog.json`，锁定并核对全部业务表的字段、默认值、约束、索引和触发器。核对文件来自独立临时库执行版本化 SQL 后的系统目录，不从待接管业务库反推。完全一致后仅新增一条迁移记录，不重跑添加字段 SQL，不更新业务数据。任何偏差或缺少核对文件都拒绝登记，事务失败回滚；重复执行返回已应用。
+
+尚未手动改表的环境直接执行 `npm run db:migrate`。不要修改已登记的初始 SQL，也不要用 `IF NOT EXISTS` 掩盖字段或约束差异。该命令不跳过初始基线核对，不为没有登记历史的数据库自动接管。
+
+### 常规开发流程
+
+`0002_d4_create_task.sql` 补齐创建契约需要的 `account_id`、`reference_inputs`、`lifecycle`、`revision` 及约束。旧任务保留原有数据，账号不自动回填；参考资料默认空数组、生命周期默认开放、版本默认 1。`execution_status` 改为可空并移除排队默认值，新建草稿无尝试时为 null；旧状态值不变。迁移不创建平台账号或业务任务。
+
 1. 修改 `backend/src/schema.ts`。
 2. 运行 `npm run db:generate -- --name=描述本次变更`。
 3. 评审新增 SQL 和快照；涉及旧数据时补充回填或转换语句。
@@ -55,3 +74,9 @@ npm run check
 ```
 
 `db:test` 使用本地 `.env` 的 PostgreSQL 管理身份创建随机命名的独立测试数据库，用完删除；也可显式提供 `MIGRATION_TEST_ADMIN_URL`。不会向业务库写测试数据，也不调用外部 API。测试覆盖空库、已有表接管与数据保留、结构不符拒绝接管、约束和触发器、重复执行、后续增量升级、失败回滚及历史校验。CI 同时验证新业务运行角色可以实际执行迁移。
+
+### D4 执行尝试与模拟执行
+
+`0003_d4_execution_attempts.sql` 增量新增执行尝试、步骤、模拟产出以及任务当前引用/工作代次，并关联任务审计。只新增结构和审计关联，不启动或重置已有任务。按正常 `npm run db:migrate` 应用；不手动修改旧迁移或重复建表。接口和本地模拟模式见 [任务说明](../../docs/infra/tasks.md)。
+
+`0004_d4_clarification_answers.sql` 新增澄清答复记录表，通过任务/尝试复合外键和同问题唯一约束关联答复。应用后支持当前待澄清尝试继续执行，不会自动启动或改写已有任务。

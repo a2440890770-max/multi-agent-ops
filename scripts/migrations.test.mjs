@@ -9,7 +9,11 @@ import { parseEnv } from 'node:util';
 import pg from 'pg';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { businessTables, inspectBusinessSchema } from './migration-catalog.mjs';
-import { migrationsFolder, runMigrations, validateBusinessTarget } from './migrations.mjs';
+import {
+  migrationsFolder,
+  runMigrations as runLatestMigrations,
+  validateBusinessTarget,
+} from './migrations.mjs';
 
 const root = new URL('../', import.meta.url);
 const envPath = new URL('.env', root);
@@ -26,8 +30,37 @@ if (!process.env.MIGRATION_TEST_ADMIN_URL) {
   adminUrl.password = env.POSTGRES_PASSWORD;
 }
 const admin = new pg.Client({ connectionString: adminUrl.href, connectionTimeoutMillis: 5000 });
-before(() => admin.connect());
-after(() => admin.end());
+let initialFolder;
+let d4MetadataFolder;
+before(async () => {
+  await admin.connect();
+  initialFolder = await mkdtemp(join(tmpdir(), 'ops-initial-migration-'));
+  await cp(migrationsFolder, initialFolder, { recursive: true });
+  const path = join(initialFolder, 'meta/_journal.json');
+  const journal = JSON.parse(await readFile(path, 'utf8'));
+  journal.entries = journal.entries.slice(0, 1);
+  await writeFile(path, JSON.stringify(journal));
+  d4MetadataFolder = await mkdtemp(join(tmpdir(), 'ops-d4-metadata-'));
+  await cp(migrationsFolder, d4MetadataFolder, { recursive: true });
+  const d4Path = join(d4MetadataFolder, 'meta/_journal.json');
+  const d4Journal = JSON.parse(await readFile(d4Path, 'utf8'));
+  d4Journal.entries = d4Journal.entries.slice(0, 2);
+  await writeFile(d4Path, JSON.stringify(d4Journal));
+});
+after(async () => {
+  await admin.end();
+  if (initialFolder) await rm(initialFolder, { recursive: true, force: true });
+  if (d4MetadataFolder) await rm(d4MetadataFolder, { recursive: true, force: true });
+});
+
+function runAllMigrations(client, action, folder = d4MetadataFolder) {
+  return runLatestMigrations(client, action, folder);
+}
+
+// Keep historical D3 baseline cases pinned to their original migration.
+function runMigrations(client, action, folder = initialFolder) {
+  return runAllMigrations(client, action, folder);
+}
 
 async function database(t) {
   const name = `d3_migration_test_${randomBytes(8).toString('hex')}`;
@@ -231,7 +264,7 @@ test('后续新增字段按版本升级；失败回滚 DDL 和记录，修改过
   const original = await dataFingerprint(c);
   const dir = await mkdtemp(join(tmpdir(), 'ops-migrations-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  await cp(migrationsFolder, dir, { recursive: true });
+  await cp(initialFolder, dir, { recursive: true });
   const journalPath = join(dir, 'meta/_journal.json');
   const journal = JSON.parse(await readFile(journalPath, 'utf8'));
   journal.entries.push({
@@ -319,6 +352,8 @@ test('独立非超级用户可初始化自己拥有的业务库', async (t) => {
     await admin.query(`DROP DATABASE IF EXISTS "${name}"`);
     await admin.query(`DROP ROLE "${role}"`);
   });
+  // PostgreSQL 16 requires SET ROLE membership when assigning a database owner.
+  await admin.query(`GRANT "${role}" TO CURRENT_USER`);
   await admin.query(`CREATE DATABASE "${name}" OWNER "${role}"`);
   const url = new URL(adminUrl);
   url.pathname = '/' + name;
@@ -335,4 +370,166 @@ test('独立非超级用户可初始化自己拥有的业务库', async (t) => {
   await seed(client);
   await client.query('DROP SCHEMA drizzle CASCADE');
   assert.deepEqual(await runMigrations(client, 'baseline'), { baselined: true, tablesVerified: 8 });
+});
+
+async function applyManualTaskMetadata(client) {
+  const migration = readMigrationFiles({ migrationsFolder })[1];
+  for (const statement of migration.sql) if (statement.trim()) await client.query(statement);
+}
+
+test('D4 空库执行完整迁移，字段、外键和索引与核对文件一致', async (t) => {
+  const c = await database(t);
+  assert.deepEqual(await runAllMigrations(c, 'migrate'), { applied: 2, pending: 0 });
+  const manifest = JSON.parse(
+    await readFile(join(migrationsFolder, '0001_d4_task_metadata.catalog.json'), 'utf8'),
+  );
+  assert.equal(manifest.sqlHash, readMigrationFiles({ migrationsFolder })[1].hash);
+  assert.deepEqual(await inspectBusinessSchema(c), manifest.schema);
+  const { team, member } = await seed(c);
+  await c.query(
+    `UPDATE tasks SET created_by=$1, team_id=$2, current_step='research', error_message='test'`,
+    [member, team],
+  );
+  await assert.rejects(
+    c.query("UPDATE tasks SET created_by='00000000-0000-0000-0000-000000000000'"),
+    { code: '23503' },
+  );
+  await assert.rejects(c.query("UPDATE tasks SET team_id='00000000-0000-0000-0000-000000000000'"), {
+    code: '23503',
+  });
+  const before = await dataFingerprint(c);
+  assert.deepEqual(await runAllMigrations(c, 'migrate'), { applied: 0, pending: 0 });
+  assert.deepEqual(await dataFingerprint(c), before);
+});
+
+test('D3 增量升级保留历史任务及原始要求，新字段默认空值', async (t) => {
+  const c = await database(t);
+  await runMigrations(c, 'migrate');
+  await seed(c);
+  const before = (await c.query('SELECT * FROM tasks')).rows;
+  assert.deepEqual(await runAllMigrations(c, 'migrate'), { applied: 1, pending: 0 });
+  const after = (await c.query('SELECT * FROM tasks')).rows;
+  assert.deepEqual(
+    after,
+    before.map((row) => ({
+      ...row,
+      created_by: null,
+      team_id: null,
+      current_step: null,
+      error_message: null,
+    })),
+  );
+});
+
+test('手动新增字段核对后只登记增量记录，重复接管和迁移不修改业务数据', async (t) => {
+  const c = await database(t);
+  await runMigrations(c, 'migrate');
+  await seed(c);
+  await applyManualTaskMetadata(c);
+  const before = await dataFingerprint(c);
+  const schema = await inspectBusinessSchema(c);
+  assert.deepEqual(await runAllMigrations(c, 'status'), { applied: 1, pending: 1 });
+  assert.deepEqual(await runAllMigrations(c, 'adopt'), {
+    adopted: true,
+    migration: '0001_d4_task_metadata',
+    tablesVerified: 8,
+  });
+  assert.deepEqual(await runAllMigrations(c, 'adopt'), { adopted: false, alreadyApplied: true });
+  assert.deepEqual(await runAllMigrations(c, 'migrate'), { applied: 0, pending: 0 });
+  assert.deepEqual(await dataFingerprint(c), before);
+  assert.deepEqual(await inspectBusinessSchema(c), schema);
+  assert.deepEqual(await runAllMigrations(c, 'status'), { applied: 2, pending: 0 });
+});
+
+test('增量接管拒绝字段、外键、索引或已有结构偏差，不写迁移记录', async (t) => {
+  const cases = [
+    'ALTER TABLE tasks ALTER COLUMN current_step TYPE varchar(100)',
+    "ALTER TABLE tasks ALTER COLUMN error_message SET DEFAULT 'unexpected'",
+    'ALTER TABLE tasks ALTER COLUMN created_by SET NOT NULL',
+    'ALTER TABLE tasks DROP CONSTRAINT tasks_created_by_fkey',
+    'ALTER TABLE tasks DROP CONSTRAINT tasks_team_id_fkey',
+    'DROP INDEX tasks_team_created_at_idx',
+    'DROP INDEX tasks_created_by_idx',
+    'ALTER TABLE tasks DROP COLUMN current_step',
+    'ALTER TABLE members ALTER COLUMN auth_version SET DEFAULT 2',
+  ];
+  for (const sql of cases) {
+    const c = await database(t);
+    await runMigrations(c, 'migrate');
+    const { member, team } = await seed(c);
+    await applyManualTaskMetadata(c);
+    await c.query(
+      `UPDATE tasks SET created_by=$1, team_id=$2, current_step='research', error_message='test'`,
+      [member, team],
+    );
+    await c.query(sql);
+    const before = await dataFingerprint(c);
+    await assert.rejects(runAllMigrations(c, 'adopt'), /现有结构与增量迁移不一致/);
+    assert.deepEqual(await runAllMigrations(c, 'status'), { applied: 1, pending: 1 });
+    assert.deepEqual(await dataFingerprint(c), before);
+  }
+});
+
+test('增量接管核对 SQL 哈希且要求已有初始基线', async (t) => {
+  const c = await database(t);
+  await assert.rejects(runAllMigrations(c, 'adopt'), /先核对并登记初始基线/);
+  assert.equal(
+    (await c.query("SELECT to_regclass('drizzle.__drizzle_migrations') AS name")).rows[0].name,
+    null,
+  );
+  await runMigrations(c, 'migrate');
+  await applyManualTaskMetadata(c);
+  const dir = await mkdtemp(join(tmpdir(), 'ops-adoption-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await cp(migrationsFolder, dir, { recursive: true });
+  const file = join(dir, '0001_d4_task_metadata.sql');
+  await writeFile(file, (await readFile(file, 'utf8')) + '\n-- changed SQL\n');
+  await assert.rejects(runAllMigrations(c, 'adopt', dir), /增量 SQL 与结构核对文件不一致/);
+  assert.deepEqual(await runAllMigrations(c, 'status'), { applied: 1, pending: 1 });
+});
+
+test('创建草稿迁移保留旧任务，新增任务无执行状态，账号与输入约束真实生效', async (t) => {
+  const c = await database(t);
+  await runAllMigrations(c, 'migrate');
+  const { account } = await seed(c);
+  const before = (await c.query('SELECT * FROM tasks')).rows;
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 3, pending: 0 });
+  assert.deepEqual(
+    (await c.query('SELECT * FROM tasks')).rows,
+    before.map((row) => ({
+      ...row,
+      account_id: null,
+      reference_inputs: [],
+      lifecycle: 'open',
+      revision: 1,
+      current_attempt_id: null,
+      current_content_version_id: null,
+      work_generation: 0,
+    })),
+  );
+  const [draft] = (
+    await c.query(
+      `INSERT INTO tasks(title,original_request,account_id)
+    VALUES ('draft','original request',$1) RETURNING *`,
+      [account],
+    )
+  ).rows;
+  assert.equal(draft.execution_status, null);
+  assert.equal(draft.current_step, null);
+  assert.deepEqual(draft.reference_inputs, []);
+  await assert.rejects(
+    c.query("UPDATE tasks SET account_id='00000000-0000-0000-0000-000000000000' WHERE id=$1", [
+      draft.id,
+    ]),
+    { code: '23503' },
+  );
+  for (const sql of [
+    "UPDATE tasks SET reference_inputs='{}'::jsonb",
+    "UPDATE tasks SET lifecycle='invalid'",
+    'UPDATE tasks SET revision=0',
+  ])
+    await assert.rejects(c.query(sql), { code: '23514' });
+  const fingerprint = await dataFingerprint(c);
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 0, pending: 0 });
+  assert.deepEqual(await dataFingerprint(c), fingerprint);
 });

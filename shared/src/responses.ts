@@ -18,6 +18,7 @@ import type {
   TaskSummary,
   AgentStep,
   ExecutionAttempt,
+  ClarificationAnswer,
 } from './domain.js';
 import type { ApiError, Page, SaveContentResult } from './api.js';
 
@@ -58,6 +59,11 @@ export interface ResponseModels {
   Experiment: Experiment;
   BlindItem: { item: BlindItem | null; remaining: number };
   BlindScore: { id: string; itemId: string; submittedAt: string };
-  History: { attempts: ExecutionAttempt[]; steps: AgentStep[]; audit: Page<AuditEvent> };
+  History: {
+    attempts: ExecutionAttempt[];
+    steps: AgentStep[];
+    clarificationAnswers: ClarificationAnswer[];
+    audit: Page<AuditEvent>;
+  };
   ApiError: ApiError;
 }

@@ -64,7 +64,7 @@ test('业务导航可直接刷新；管理布局使用后端返回的当前身�
 
 test('冲突保留输入；工作/发布锁和未保存输入阻断关键操作', async ({ page }) => {
   await mockAuth(page);
-  await page.goto('/tasks/task-demo');
+  await page.goto('/previews/tasks/task-demo');
   await page.screenshot({ path: 'test-results/d1-task-detail-desktop.png', fullPage: true });
   const editor = page.getByRole('textbox', { name: '当前文案', exact: true });
   await editor.fill('我的修改不能被覆盖');
@@ -91,7 +91,7 @@ test('移动端业务页面保持导航且页面本身无横向溢出', async ({
   await page.setViewportSize({ width: 390, height: 844 });
   for (const route of [
     '/tasks',
-    '/tasks/task-demo',
+    '/previews/tasks/task-demo',
     '/memories',
     '/evaluations',
     '/settings',

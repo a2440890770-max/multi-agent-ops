@@ -241,7 +241,7 @@ export const responseSchemas = {
     properties: {
       id: { type: 'string' },
       teamId: { type: 'string' },
-      accountId: { type: 'string' },
+      accountId: { anyOf: [{ type: 'null' }, { type: 'string' }] },
       title: { type: 'string' },
       originalRequest: { type: 'string' },
       referenceInputs: { type: 'array', items: { $ref: '#/components/schemas/SourceRef' } },
@@ -301,6 +301,7 @@ export const responseSchemas = {
     type: 'object',
     additionalProperties: false,
     properties: {
+      errorMessage: { anyOf: [{ type: 'null' }, { type: 'string' }] },
       currentAttempt: {
         anyOf: [
           { type: 'null' },
@@ -326,6 +327,15 @@ export const responseSchemas = {
               currentStep: { anyOf: [{ type: 'null' }, { type: 'string' }] },
               autoRevisionCount: { type: 'number' },
               configVersion: { type: 'number' },
+              executorMode: { type: 'string', enum: ['mock', 'agent'] },
+              simulationScenario: {
+                anyOf: [
+                  { type: 'null' },
+                  { type: 'string', enum: ['success'] },
+                  { type: 'string', enum: ['failure'] },
+                  { type: 'string', enum: ['clarification'] },
+                ],
+              },
               requestedBy: { type: 'string' },
               createdAt: { type: 'string' },
               cancelScope: {
@@ -366,6 +376,8 @@ export const responseSchemas = {
               'currentStep',
               'autoRevisionCount',
               'configVersion',
+              'executorMode',
+              'simulationScenario',
               'requestedBy',
               'createdAt',
               'cancelScope',
@@ -682,7 +694,29 @@ export const responseSchemas = {
           'reflect',
         ],
       },
-      account: { $ref: '#/components/schemas/Account' },
+      account: {
+        anyOf: [
+          { type: 'null' },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              displayName: { type: 'string' },
+              platform: { type: 'string', enum: ['weibo'] },
+              authorizationStatus: { type: 'string', enum: ['unconfigured', 'valid', 'expired'] },
+              officialPublishAvailable: { type: 'boolean' },
+            },
+            required: [
+              'id',
+              'displayName',
+              'platform',
+              'authorizationStatus',
+              'officialPublishAvailable',
+            ],
+          },
+        ],
+      },
       task: { $ref: '#/components/schemas/Task' },
       execution: {
         anyOf: [
@@ -712,6 +746,7 @@ export const responseSchemas = {
       currentStep: { anyOf: [{ type: 'null' }, { type: 'string' }] },
     },
     required: [
+      'errorMessage',
       'currentAttempt',
       'currentContent',
       'currentReview',
@@ -1475,6 +1510,15 @@ export const responseSchemas = {
       currentStep: { anyOf: [{ type: 'null' }, { type: 'string' }] },
       autoRevisionCount: { type: 'number' },
       configVersion: { type: 'number' },
+      executorMode: { type: 'string', enum: ['mock', 'agent'] },
+      simulationScenario: {
+        anyOf: [
+          { type: 'null' },
+          { type: 'string', enum: ['success'] },
+          { type: 'string', enum: ['failure'] },
+          { type: 'string', enum: ['clarification'] },
+        ],
+      },
       requestedBy: { type: 'string' },
       createdAt: { type: 'string' },
       cancelScope: {
@@ -1515,6 +1559,8 @@ export const responseSchemas = {
       'currentStep',
       'autoRevisionCount',
       'configVersion',
+      'executorMode',
+      'simulationScenario',
       'requestedBy',
       'createdAt',
       'cancelScope',
@@ -1574,6 +1620,30 @@ export const responseSchemas = {
       'traceUrl',
     ],
   },
+  ClarificationAnswer: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      id: { type: 'string' },
+      taskId: { type: 'string' },
+      attemptId: { type: 'string' },
+      questionId: { type: 'string' },
+      question: { type: 'string' },
+      answer: { type: 'string' },
+      answeredBy: { type: 'string' },
+      answeredAt: { type: 'string' },
+    },
+    required: [
+      'id',
+      'taskId',
+      'attemptId',
+      'questionId',
+      'question',
+      'answer',
+      'answeredBy',
+      'answeredAt',
+    ],
+  },
   Page_AuditEvent_: {
     type: 'object',
     additionalProperties: false,
@@ -1625,9 +1695,13 @@ export const responseSchemas = {
     properties: {
       attempts: { type: 'array', items: { $ref: '#/components/schemas/ExecutionAttempt' } },
       steps: { type: 'array', items: { $ref: '#/components/schemas/AgentStep' } },
+      clarificationAnswers: {
+        type: 'array',
+        items: { $ref: '#/components/schemas/ClarificationAnswer' },
+      },
       audit: { $ref: '#/components/schemas/Page_AuditEvent_' },
     },
-    required: ['attempts', 'steps', 'audit'],
+    required: ['attempts', 'steps', 'clarificationAnswers', 'audit'],
   },
   ApiError: {
     type: 'object',

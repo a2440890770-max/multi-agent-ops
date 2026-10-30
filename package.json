@@ -18,6 +18,7 @@
     "admin:bootstrap": "node --import tsx scripts/bootstrap-admin.mjs",
     "admin:test": "node --import tsx --test scripts/bootstrap-admin.test.mjs",
     "auth:test": "node --import tsx --test scripts/auth.test.mjs",
+    "tasks:test": "node --import tsx --test scripts/tasks.test.mjs",
     "build": "npm run build --workspace=shared && npm run build --workspace=agent && npm run build --workspace=backend && npm run build --workspace=frontend",
     "typecheck": "npm run build --workspace=shared && npm run typecheck --workspaces && tsc -p tests/e2e/tsconfig.json",
     "lint": "eslint . --max-warnings 0",
@@ -37,6 +38,7 @@
     "db:generate": "npm run db:generate --workspace=backend --",
     "db:migrate": "npm run db:migrate --workspace=backend",
     "db:baseline": "node scripts/migrations.mjs baseline",
+    "db:adopt": "node scripts/migrations.mjs adopt",
     "db:status": "node scripts/migrations.mjs status",
     "db:test": "node --test scripts/migrations.test.mjs",
     "memory:check": "node scripts/check-memory-database.mjs"

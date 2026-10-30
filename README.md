@@ -4,9 +4,9 @@
 
 本仓库使用 **npm workspaces**，由根目录 `package.json` 统一管理 `frontend/`、`backend/`、`agent/`、`shared/`；依赖版本锁定在 `package-lock.json`。
 
-当前交付包括 **D1 工程骨架、接口契约与页面设计，以及 D2 技术验证入口**：保留可导航的 React 页面、53 个接口契约与共享类型；整合模型结构化输出、只读搜索及内嵌 Mem0 存储检索的独立验证命令。D3 已补充服务端 Session 登录、当前身份及退出接口，并接通前端登录、刷新恢复身份和退出；业务接口已统一校验会话、当前角色以及写入 Origin/CSRF，任务执行、成员与配置管理、业务记忆治理、审批与发布尚未完成，Agent 的 `canExecuteTasks` 继续为 `false`。
+当前交付包括 **D1 工程骨架、接口契约与页面设计，以及 D2 技术验证入口**：保留可导航的 React 页面、53 个接口契约与共享类型；整合模型结构化输出、只读搜索及内嵌 Mem0 存储检索的独立验证命令。D3 已补充服务端 Session 登录、当前身份及退出接口，并接通前端登录、刷新恢复身份和退出；业务接口已统一校验会话、当前角色以及写入 Origin/CSRF。D4 已实现[任务创建与详情闭环](docs/infra/tasks.md)：前端真实提交、幂等重试、创建后跳转详情及刷新/重新打开恢复数据库状态，支持同团队成员查看和未绑定账号，创建不自动执行。任务列表已接通数据库、同团队历史、状态筛选、搜索和游标分页；其他业务页面仍为预览；已接通模拟执行的启动、停止、重试、步骤和尝试历史；澄清答复和同尝试继续执行也已接通；真实 Agent、输入语义检查、成员与配置管理、业务记忆治理、审批与发布尚未完成，Agent 的 `canExecuteTasks` 继续为 `false`。
 
-接口和页面交付见 [D1 设计索引](docs/design/README.md)。启动后访问 `/tasks` 预览页面，访问 `/api/v1/openapi.json` 读取契约；除三个认证接口外，业务路由先校验会话与角色（未登录 `401`、越权 `403`），写入还校验 Origin/CSRF，通过后校验请求结构并返回 `501 NOT_IMPLEMENTED`，页面明确标注示例数据。`/` 保留真实连接检测。
+接口和页面交付见 [D1 设计索引](docs/design/README.md)。登录后访问 `/tasks/new` 创建真实任务，成功跳转 `/tasks/:taskId`；`/tasks` 为真实任务列表，演示详情单独位于 `/previews/tasks/:taskId`。访问 `/api/v1/openapi.json` 读取契约；业务路由先校验会话与角色（未登录 `401`、越权 `403`），写入还校验 Origin/CSRF。认证、创建任务、列表、详情及模拟执行/历史接口已实现，其余业务处理返回 `501 NOT_IMPLEMENTED`，预览页面明确标注示例数据。`/` 保留真实连接检测。
 
 最终七项技术基线见[技术选型](docs/architecture/stack-decisions.md)：Session / ops_session / 8 小时、DeepSeek + Claude Agent SDK、WebSearch/WebFetch、Drizzle + pg + SQL 迁移、进程内 Mem0 OSS、OpenAI 1536 维嵌入、同实例独立记忆库。业务 Memory Manager 尚未实现。
 
@@ -86,6 +86,8 @@ tests/e2e/      真实前后端联调的浏览器冒烟测试
 | `npm run db:generate -- --name=变更名`    | 从表定义生成待评审的 SQL 迁移与快照                      |
 | `npm run db:migrate`                      | 将尚未应用的 SQL 迁移执行到业务库                        |
 | `npm run db:baseline`                     | 核对手动建好的表并登记初始版本，保留已有数据             |
+| `npm run db:adopt`                        | 核对已手动执行的 D4 字段变更并登记增量迁移               |
+| `npm run tasks:test`                      | 使用显式配置的独立临时库验证创建任务接口                 |
 | `npm run db:status`                       | 查看已应用及待应用迁移数量                               |
 | `npm run db:test`                         | 在独立临时数据库中验证迁移、接管、约束和数据保留         |
 | `npm exec -- playwright install chromium` | 安装本机浏览器测试依赖                                   |

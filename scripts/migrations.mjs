@@ -56,8 +56,8 @@ async function createLedger(client) {
 // One connection, transaction and advisory lock cover inspection, DDL and ledger.
 // No runtime startup imports this module to run migrations automatically.
 export async function runMigrations(client, action, folder = migrationsFolder) {
-  if (!['migrate', 'baseline', 'status'].includes(action))
-    throw new Error('只支持 migrate / baseline / status。');
+  if (!['migrate', 'baseline', 'adopt', 'status'].includes(action))
+    throw new Error('只支持 migrate / baseline / adopt / status。');
   const migrations = readMigrationFiles({ migrationsFolder: folder });
   if (!migrations.length) throw new Error('没有可应用的 SQL 迁移。');
   await client.query('BEGIN');
@@ -70,6 +70,32 @@ export async function runMigrations(client, action, folder = migrationsFolder) {
     if (action === 'status') {
       await client.query('COMMIT');
       return { applied: history.length, pending: migrations.length - history.length };
+    }
+    if (action === 'adopt') {
+      if (!history.length) throw new Error('请先核对并登记初始基线，再接管增量迁移。');
+      if (history.length === migrations.length) {
+        await client.query('COMMIT');
+        return { adopted: false, alreadyApplied: true };
+      }
+      const journal = JSON.parse(await readFile(resolve(folder, 'meta/_journal.json'), 'utf8'));
+      const entry = journal.entries[history.length];
+      const migration = migrations[history.length];
+      const manifest = JSON.parse(
+        await readFile(resolve(folder, `${entry.tag}.catalog.json`), 'utf8'),
+      );
+      if (manifest.sqlHash !== migration.hash)
+        throw new Error('增量 SQL 与结构核对文件不一致，拒绝接管。');
+      for (const name of businessTables)
+        await client.query(`LOCK TABLE public."${name}" IN SHARE MODE`);
+      const difference = firstDifference(manifest.schema, await inspectBusinessSchema(client));
+      if (difference)
+        throw new Error(`现有结构与增量迁移不一致：${difference}；未修改表或登记迁移。`);
+      await client.query(`INSERT INTO ${ledger} (hash, created_at) VALUES ($1, $2)`, [
+        migration.hash,
+        migration.folderMillis,
+      ]);
+      await client.query('COMMIT');
+      return { adopted: true, migration: entry.tag, tablesVerified: businessTables.length };
     }
     if (action === 'baseline') {
       if (history.length) {
