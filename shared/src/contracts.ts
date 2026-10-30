@@ -130,7 +130,7 @@ const verification = input(
   ],
 );
 
-/** All business endpoints are contract-only in D1; registered handlers return 501. */
+/** D3 authentication and business authorization are implemented; business handlers are stubs. */
 export const endpoints: readonly Endpoint[] = [
   endpoint({
     operationId: 'login',
@@ -142,10 +142,12 @@ export const endpoints: readonly Endpoint[] = [
     response: 'Session',
     success: 200,
     conditions:
-      '本地成员口令方案初稿；成员 active；统一凭据错误，不暴露账号存在性。成功设置 HttpOnly 会话 Cookie。',
+      '内部成员口令登录；成员 active；统一凭据错误，账号/IP 持久限流；可信 Origin；成功设置 HttpOnly 会话 Cookie，绝对有效 8 小时。',
     transitions: [],
     audit: 'auth.login（不含口令）',
     ac: ['AC-08'],
+    repetition:
+      '须 Idempotency-Key；凭据仍有效时同键同请求复用原会话，权限反映当前成员角色；同键不同请求 409；已退出、过期或撤销的会话不复活。重放材料仅加密持久化。',
   }),
   endpoint({
     operationId: 'logout',
@@ -241,7 +243,8 @@ export const endpoints: readonly Endpoint[] = [
     ),
     response: 'TaskDetail',
     success: 201,
-    conditions: '服务端固定团队唯一账号；revision=1、lifecycle=open；所有当前引用为空。',
+    conditions:
+      '团队已配置唯一账号时由服务端绑定；未配置时允许先保存草稿，accountId 和 account 为 null，后续绑定；标题和原始要求不能仅含空白，原文保留；revision=1、lifecycle=open；所有当前引用为空，不创建执行尝试。',
     transitions: ['A01'],
     audit: 'task.created',
     ac: ['AC-01'],
@@ -289,7 +292,8 @@ export const endpoints: readonly Endpoint[] = [
     path: '/tasks/:taskId',
     summary: '任务详情、锁与操作资格',
     response: 'TaskDetail',
-    conditions: '同团队；一次一致性快照；actions 是服务端建议，每次写入仍须重校验。',
+    conditions:
+      '同团队成员可查看；一次一致性快照读取任务和绑定账号摘要，未绑定账号正常返回 null；返回当前步骤和 errorMessage；不存在或跨团队统一 404；历史创建人缺失或账号跨团队错绑返回 409 INVALID_STATE；actions 是服务端建议，每次写入仍须重校验。',
     transitions: [],
     audit: '访问日志',
     ac: ['AC-01', 'AC-10'],
@@ -302,7 +306,7 @@ export const endpoints: readonly Endpoint[] = [
     query: read,
     response: 'History',
     conditions:
-      '同团队；cursor 仅作用于 audit；attempts/steps 为首期有界完整记录；不含内部推理或凭据。',
+      '同团队；cursor 仅作用于 audit；每任务最多 100 次完整尝试，attempts/steps 及 clarificationAnswers 完整返回；包含模拟模式标识，不含配置快照、内部推理或凭据。',
     transitions: [],
     audit: '访问日志',
     ac: ['AC-03', 'AC-10', 'AC-11'],
@@ -319,7 +323,7 @@ export const endpoints: readonly Endpoint[] = [
     }),
     response: 'TaskDetail',
     conditions:
-      'open；当前 attempt=awaiting_clarification，无取消或发布锁；问题属于当前尝试；追加答复，不覆盖历史。',
+      '同团队、任务 open、当前模拟 attempt=awaiting_clarification，无取消意图；原子比较 expectedRevision 与 attemptId；仅接受当前未答问题的非空答复，追加记录答复人和时间，不覆盖历史；部分答复保持待澄清，全部答复后继续同一次尝试，保留原始输入和已完成步骤；当前不进行语义充分性或冲突判断。',
     transitions: ['E02', 'E03'],
     audit: 'task.clarified',
     ac: ['AC-02'],
@@ -329,9 +333,12 @@ export const endpoints: readonly Endpoint[] = [
     method: 'POST',
     path: '/tasks/:taskId/attempts',
     summary: '首次启动完整执行',
-    body: input(revision),
+    body: input(
+      { ...revision, simulationScenario: choice('success', 'failure', 'clarification') },
+      ['expectedRevision'],
+    ),
     response: 'TaskDetail',
-    conditions: `${taskRules}尚无完整尝试；新尝试从研究开始，计数=0，配置快照冻结；清空当前内容/审核、失效旧批准。`,
+    conditions: `${taskRules}尚无完整尝试且无遗留执行状态；D4 仅模拟执行，无账号也可验证；simulationScenario 默认 success，可选 failure/clarification；输入及模拟器 v1 配置冻结，计数=0；创建 queued 尝试和步骤，清空当前产出。`,
     transitions: ['E01', 'A05'],
     audit: 'attempt.started',
     ac: ['AC-01', 'AC-03', 'AC-05'],
@@ -344,7 +351,7 @@ export const endpoints: readonly Endpoint[] = [
     body: input({ ...revision, reason }),
     response: 'TaskDetail',
     conditions:
-      '当前尝试待澄清/queued/running、无发布锁；只记录取消意图；必须确认停止/隔离旧 generation 后解锁；任务仍 open。',
+      '当前模拟尝试待澄清/queued/running，任务 open；模拟执行无外部调用，在同一事务记录取消、隔离旧 generation 并确认停止后解锁；任务仍 open。真实执行的异步停止尚未实现。',
     transitions: ['E10', 'E11', 'E12'],
     audit: 'attempt.stop_requested / attempt.stopped',
     ac: ['AC-07'],
@@ -354,10 +361,19 @@ export const endpoints: readonly Endpoint[] = [
     method: 'POST',
     path: '/tasks/:taskId/attempt-retries',
     summary: '重新执行或显式重启已终止任务',
-    body: input({ ...revision, previousAttemptId: nullableId, restartTerminated: bool, reason }),
+    body: input(
+      {
+        ...revision,
+        previousAttemptId: nullableId,
+        restartTerminated: bool,
+        reason,
+        simulationScenario: choice('success', 'failure', 'clarification'),
+      },
+      ['expectedRevision', 'previousAttemptId', 'restartTerminated', 'reason'],
+    ),
     response: 'TaskDetail',
     conditions:
-      '任务未发布、无工作/发布锁；previousAttemptId 匹配当前已结束尝试；从未执行就已终止时显式传 null；terminated 须 restartTerminated=true；新 attemptNo，从研究开始，不续跑旧步骤。',
+      'D4 仅开放任务的模拟重试，restartTerminated 必须 false；previousAttemptId 匹配当前已结束尝试，无工作槽；新 attemptNo，从头执行并保留旧记录；simulationScenario 默认 success，可选 failure/clarification；已终止任务的重启后续实现。',
     transitions: ['E13', 'A05'],
     audit: 'attempt.retried / task.reopened',
     ac: ['AC-03', 'AC-05', 'AC-07'],
@@ -930,7 +946,13 @@ export function getOpenApiDocument() {
         description: '取自 /auth/me，与会话绑定。',
       });
     const response = {
-      description: '业务实现后的成功响应；D1 占位仅返回 501。',
+      description: ['login', 'getMe', 'logout'].includes(e.operationId)
+        ? 'D3 认证接口成功响应；需要配置业务数据库和认证密钥。'
+        : e.operationId === 'createTask'
+          ? 'D4 创建任务成功响应；任务、幂等记录及审计同事务保存，不自动执行。'
+          : e.operationId === 'getTask'
+            ? 'D4 详情查询成功响应；同团队只读查询当前持久化状态，replayed=false。'
+            : '业务实现后的成功响应；当前先校验会话、角色及写入 Origin/CSRF，通过后返回 501 占位。',
       content: {
         'application/json': {
           schema: {
@@ -967,9 +989,24 @@ export function getOpenApiDocument() {
         : {}),
       responses,
       'x-roles': e.roles,
+      'x-authorization-implemented': true,
       'x-transitions': e.transitions,
       'x-ac': e.ac,
-      'x-implementation': 'contract-only',
+      'x-implementation': [
+        'login',
+        'getMe',
+        'logout',
+        'createTask',
+        'getTask',
+        'listTasks',
+        'startTask',
+        'retryTask',
+        'stopAttempt',
+        'taskHistory',
+        'clarifyTask',
+      ].includes(e.operationId)
+        ? 'implemented'
+        : 'contract-only',
       'x-error-codes': e.errors,
     };
   }
@@ -978,7 +1015,8 @@ export function getOpenApiDocument() {
     info: {
       title: 'Multi-Agent Ops D1 接口契约',
       version: '0.1.0',
-      description: '契约初稿，业务路由返回 501；不表示鉴权、数据库状态机或真实发布已实现。',
+      description:
+        '已实现服务端 Session 登录、当前身份、退出、业务权限校验及 D4 创建草稿任务、同团队任务列表、筛选和详情查询；创建任务不自动执行；已实现模拟执行的启动、停止、从头重试、历史记录和持久化状态流；其他业务处理仍为 501 占位，已支持澄清答复与同尝试恢复；真实 Agent、自动语义检查及真实发布尚未实现。',
     },
     paths,
     components: {

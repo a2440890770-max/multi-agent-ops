@@ -75,7 +75,7 @@ function fields(s, prefix = '') {
   });
 }
 let output =
-  '# D1 接口逐项参考（生成文件）\n\n由 shared 契约生成；运行 `npm run contract:generate` 更新。通用权限、错误、超时与审计规则见 [接口契约说明](api-contract.md)。所有业务处理均为 D1 占位，当前返回 501。\n\n';
+  '# 接口逐项参考（生成文件）\n\n由 shared 契约生成；运行 `npm run contract:generate` 更新。通用权限、错误、超时与审计规则见 [接口契约说明](api-contract.md)。已实现登录、当前身份、退出、业务权限校验及 D4 创建草稿任务、同团队任务列表、筛选及详情查询；创建只保存输入，不自动执行；模拟执行的启动、停止、重试、历史及澄清答复/继续执行已实现，真实 Agent 及其他业务处理仍为 501 占位。\n\n';
 output += '| 操作 ID | 方法与路径 | 用途 |\n| --- | --- | --- |\n';
 for (const e of endpoints)
   output += `| ${e.operationId} | ${e.method} /api/v1${e.path} | [${e.summary}](#${e.operationId.toLowerCase()}) |\n`;

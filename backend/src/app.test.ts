@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createApp } from './app.js';
 import { endpoints, getOpenApiDocument } from '@multi-agent-ops/shared';
-import type { Schema } from '@multi-agent-ops/shared';
 
 const agent = {
   service: 'agent',
@@ -66,23 +65,7 @@ test('OpenAPI 每个接口均有请求、完整响应、角色及状态关联，
   }
 });
 
-function validInput(schema: Schema): unknown {
-  if (schema.enum) return schema.enum[0];
-  if (Array.isArray(schema.type) && schema.type.includes('null')) return null;
-  if (schema.type === 'object')
-    return Object.fromEntries(
-      (schema.required ?? []).map((name) => [name, validInput(schema.properties![name]!)]),
-    );
-  if (schema.type === 'array')
-    return Array.from({ length: schema.minItems ?? 0 }, () => validInput(schema.items!));
-  if (schema.type === 'integer') return schema.minimum ?? 1;
-  if (schema.type === 'boolean') return true;
-  if (schema.format === 'uri') return 'https://example.com/evidence';
-  if (schema.pattern === '^[a-f0-9]{64}$') return 'a'.repeat(64);
-  return 'x'.repeat(Math.max(schema.minLength ?? 1, 1));
-}
-
-test('所有业务占位路由返回 501，且不访问数据库或 Agent，不能伪造业务成功', async () => {
+test('所有业务路由优先拒绝未登录请求，公开契约不受影响且不访问依赖', async () => {
   let dependencyCalls = 0;
   const app = createApp({
     checkDatabase: async () => {
@@ -98,19 +81,16 @@ test('所有业务占位路由返回 501，且不访问数据库或 Agent，不�
     const spec = await app.inject('/api/v1/openapi.json');
     assert.equal(spec.statusCode, 200);
     for (const endpoint of endpoints) {
-      const query = endpoint.query
-        ? new URLSearchParams(validInput(endpoint.query) as Record<string, string>).toString()
-        : '';
+      if (['login', 'getMe', 'logout'].includes(endpoint.operationId)) continue;
       const response = await app.inject({
         method: endpoint.method,
-        url: `/api/v1${endpoint.path.replace(/:[A-Za-z]+/g, 'id')}${query ? `?${query}` : ''}`,
-        headers: { 'idempotency-key': 'contract-test-key-0001' },
-        ...(endpoint.body ? { payload: validInput(endpoint.body) as Record<string, unknown> } : {}),
+        url: `/api/v1${endpoint.path.replace(/:[A-Za-z]+/g, 'id')}`,
       });
-      assert.equal(response.statusCode, 501, `${endpoint.operationId}: ${response.body}`);
-      assert.equal(response.json().error.code, 'NOT_IMPLEMENTED');
+      assert.equal(response.statusCode, 401, `${endpoint.operationId}: ${response.body}`);
+      assert.equal(response.json().error.code, 'UNAUTHENTICATED');
       assert.ok(response.json().meta.requestId);
       assert.equal(response.json().error.retryable, false);
+      assert.equal(response.headers['cache-control'], 'no-store');
     }
     assert.equal(dependencyCalls, 0);
   } finally {
@@ -118,28 +98,28 @@ test('所有业务占位路由返回 501，且不访问数据库或 Agent，不�
   }
 });
 
-test('保存文案必须同时提交并发号和基版，拒绝未知字段及不合法正文结构', async () => {
+test('未登录时忽略伪造角色并优先于正文、动作键和 JSON 格式校验返回 401', async () => {
   const app = createApp({
     checkDatabase: async () => ({ status: 'not_ready', database: 'unconfigured' }),
     checkAgent: async () => agent,
   });
   try {
-    for (const payload of [
-      { body: '新文案' },
-      { expectedRevision: 12, body: '新文案' },
-      { expectedRevision: 12, baseContentVersionId: 'v3', body: '新文案', status: 'published' },
-      { expectedRevision: -1, baseContentVersionId: 'v3', body: '新文案' },
-    ]) {
+    for (const payload of [{ role: 'admin' }, '{broken-json']) {
       const response = await app.inject({
         method: 'POST',
         url: '/api/v1/tasks/task-demo/content-versions',
-        headers: { 'idempotency-key': 'contract-test-key-0002' },
+        headers: { 'content-type': 'application/json', 'x-role': 'admin', 'x-member-id': 'admin' },
         payload,
       });
-      assert.equal(response.statusCode, 400);
-      assert.equal(response.json().error.code, 'VALIDATION_ERROR');
-      assert.ok(response.json().error.fieldErrors.length > 0);
+      assert.equal(response.statusCode, 401);
+      assert.equal(response.json().error.code, 'UNAUTHENTICATED');
     }
+    const unavailable = await app.inject({
+      url: '/api/v1/tasks',
+      headers: { cookie: `ops_session=${'a'.repeat(43)}` },
+    });
+    assert.equal(unavailable.statusCode, 503);
+    assert.equal(unavailable.json().error.code, 'DEPENDENCY_UNAVAILABLE');
   } finally {
     await app.close();
   }

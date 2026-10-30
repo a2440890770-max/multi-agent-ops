@@ -17,4 +17,4 @@
 - **首次安装较慢**：需下载 npm 包和 PostgreSQL 16 + pgvector 镜像。跨平台由官方镜像选择对应架构。
 - **依赖包契约找不到**：`npm run dev` / `npm run check` 会先构建 shared；单独启动包前运行 `npm run build --workspace=shared`。
 
-`npm run db:down` 不带 `-v`，不会删除数据。仓库不提供一键删卷脚本。新环境使用独立的初始化管理身份、业务角色和记忆角色；记忆库与业务库共享实例，数据库及角色分离。运行 `npm run memory:setup` / `npm run memory:check` 检查配置，不会调用外部 API。旧超级用户配置、镜像/卷兼容和旧 768 维索引的迁移见[记忆接入](../architecture/memory.md)。生产部署、备份恢复验收、HTTPS 和服务端 Session 登录仍属于后续工作。
+`npm run db:down` 不带 `-v`，不会删除数据。仓库不提供一键删卷脚本。新环境使用独立的初始化管理身份、业务角色和记忆角色；记忆库与业务库共享实例，数据库及角色分离。运行 `npm run memory:setup` / `npm run memory:check` 检查配置，不会调用外部 API。旧超级用户配置、镜像/卷兼容和旧 768 维索引的迁移见[记忆接入](../architecture/memory.md)。服务端 Session 登录、前端身份恢复和业务接口权限校验已实现，见[认证说明](auth.md)。生产部署、备份恢复验收及 HTTPS 尚未完成；共享部署按当前安排暂缓。

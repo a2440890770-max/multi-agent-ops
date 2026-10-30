@@ -74,10 +74,20 @@ export interface Clarification {
   question: string;
   answer: string | null;
 }
+export interface ClarificationAnswer {
+  id: Id;
+  taskId: Id;
+  attemptId: Id;
+  questionId: Id;
+  question: string;
+  answer: string;
+  answeredBy: Id;
+  answeredAt: Timestamp;
+}
 export interface Task {
   id: Id;
   teamId: Id;
-  accountId: Id;
+  accountId: Id | null;
   title: string;
   originalRequest: string;
   referenceInputs: SourceRef[];
@@ -106,6 +116,8 @@ export interface ExecutionAttempt {
   currentStep: string | null;
   autoRevisionCount: number;
   configVersion: number;
+  executorMode: 'mock' | 'agent';
+  simulationScenario: 'success' | 'failure' | 'clarification' | null;
   requestedBy: Id;
   createdAt: Timestamp;
   cancelScope: 'stop_attempt' | 'terminate_task' | null;
@@ -351,6 +363,7 @@ export interface TaskSummary {
   currentStep: string | null;
 }
 export interface TaskDetail extends TaskSummary {
+  errorMessage: string | null;
   currentAttempt: ExecutionAttempt | null;
   currentContent: ContentVersion | null;
   currentReview: ReviewCycle | null;
@@ -359,7 +372,7 @@ export interface TaskDetail extends TaskSummary {
   latestReflection: Reflection | null;
   workLock: WorkLock | null;
   actions: Record<TaskAction, ActionAvailability>;
-  account: Account;
+  account: Account | null;
 }
 export interface ConfigVersion {
   version: number;

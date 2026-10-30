@@ -4,10 +4,10 @@
 
 | 项目     | 最终选型                                                                                        | 实现边界                                                  |
 | -------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| 登录     | 内部成员账号 + 服务端 Session，Cookie 为 `ops_session`，绝对有效期 8 小时                       | 尚未实现；不采用 JWT access/refresh token                 |
+| 登录     | 内部成员账号 + 服务端 Session，Cookie 为 `ops_session`，绝对有效期 8 小时                       | 已接通认证、前端登录及业务会话/角色/CSRF 校验             |
 | 模型     | Claude Agent SDK TypeScript `0.3.311` → DeepSeek 官方 Anthropic 兼容接口，默认 `deepseek-flash` | 保留模型和结构化输出验证；业务执行器未实现                |
 | 搜索     | SDK `WebSearch` / `WebFetch`，沿用 DeepSeek 配置及来源核对                                      | 保留独立验证入口；不接入 Tavily，中文业务质量待验收       |
-| ORM      | Drizzle ORM `0.45.4` + `pg` + Drizzle Kit `0.31.11` SQL 迁移                                    | 提供业务库连接和迁移入口；尚无业务表或业务迁移            |
+| ORM      | Drizzle ORM `0.45.4` + `pg` + Drizzle Kit `0.31.11` SQL 迁移                                    | D3 表定义、初始迁移与已有表接管已提供；业务接口仍未实现   |
 | Mem0     | `mem0ai@3.3.1` 的 TypeScript OSS，Agent 进程内运行                                              | 保留 `infer:false` 显式写入；业务 Memory Manager 尚未实现 |
 | 嵌入     | OpenAI 官方 `text-embedding-3-small`，固定 1536 维                                              | 替换 Ollama；真实账号可用性与中文召回需重新验证           |
 | 向量存储 | PostgreSQL 16 + pgvector，与业务库同实例，独立记忆数据库和专用非超级用户                        | 共用 Compose 服务与持久卷；权限、扩展和持久化单独检查     |
@@ -16,11 +16,11 @@
 
 管理员创建内部成员，不开放公开注册。后续实现使用安全密码哈希、登录限流和统一凭据错误。服务端保存会话与成员关联、到期及撤销状态；会话标识是高熵不透明随机值，数据库保存其安全摘要，不保存可重放的明文凭证。
 
-生产使用同源 HTTPS，`ops_session` 为 `HttpOnly; Secure; SameSite=Lax; Path=/`。会话从登录起绝对有效 8 小时，普通请求不无限续期；退出、成员禁用及改密撤销相应会话。每次请求校验会话、当前成员状态和角色，权限变更立即生效。登录校验可信 Origin，其他写入校验同源 Origin 及 CSRF token。Cookie 不替代发布批准和版本检查。前端预览身份不是真实登录，当前不得虚构可用账号或登录成功。
+生产使用同源 HTTPS，`ops_session` 为 `HttpOnly; Secure; SameSite=Lax; Path=/`。会话从登录起绝对有效 8 小时，普通请求不无限续期；退出、成员禁用及改密撤销相应会话。每次请求校验会话、当前成员状态和角色，权限变更立即生效。登录校验可信 Origin，其他写入校验同源 Origin 及 CSRF token。Cookie 不替代发布批准和版本检查。前端通过 /auth/me 恢复真实成员身份，已移除预览身份切换；业务接口已接入会话、角色及写入 Origin/CSRF 校验，通过后仍为业务占位。
 
 ## ORM 与迁移
 
-业务表定义统一放在 `backend/src/schema.ts`，通过 `backend/src/database.ts` 的 Drizzle/pg 入口访问。运行 `npm run db:generate` 生成 SQL 和快照，评审后运行 `npm run db:migrate`；不使用 schema push 绕过评审。没有业务表时不生成虚构迁移。现有健康检查允许使用底层 SQL。
+业务表定义统一放在 `backend/src/schema.ts`，通过 `backend/src/database.ts` 的 Drizzle/pg 入口访问。运行 `npm run db:generate` 生成 SQL 和快照，评审后运行 `npm run db:migrate`；不使用 schema push 绕过评审。初始版本管理 D3 的 7 张基础表及保留的原型 `tasks` 表；已有同构表先备份并运行 `db:baseline` 核对登记。后续变更追加新 SQL，不回改已应用的版本；详见[迁移说明](../../backend/drizzle/README.md)。现有健康检查允许使用底层 SQL。
 
 Drizzle 仅管理业务库；不得声明或接管 Mem0 私有检索表。业务迁移使用业务 `DATABASE_URL`，不得使用 `MEM0_DATABASE_URL` 或数据库管理身份。
 

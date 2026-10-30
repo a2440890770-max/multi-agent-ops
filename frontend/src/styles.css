@@ -541,6 +541,7 @@ header {
   margin-bottom: 12px;
 }
 .page-title h1 {
+  overflow-wrap: anywhere;
   font-size: clamp(24px, 2.4vw, 34px);
   letter-spacing: -0.8px;
 }
@@ -808,6 +809,38 @@ td small {
 .detail-panel h2 {
   margin-bottom: 16px;
 }
+.task-original {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+}
+.task-metadata {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+.task-metadata dt {
+  color: #7d8d73;
+  font-size: 11px;
+}
+.task-metadata dd {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.task-references {
+  padding-left: 20px;
+  line-height: 1.9;
+}
+.task-references li {
+  margin-bottom: 12px;
+}
+.task-references a,
+.task-references span {
+  display: block;
+  overflow-wrap: anywhere;
+}
 h3 {
   font-size: 13px;
   font-weight: 550;
@@ -900,6 +933,8 @@ dd {
   margin-bottom: 24px;
 }
 .status-strip > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 18px 22px;
   border-right: 1px solid #e0e6d9;
 }
@@ -1261,4 +1296,30 @@ details p {
     gap: 20px;
     font-size: 11px;
   }
+}
+.execution-attempt + .execution-attempt {
+  margin-top: 16px;
+}
+.execution-attempt h3 {
+  margin: 0;
+}
+.execution-steps {
+  padding-left: 22px;
+}
+.execution-steps li {
+  margin: 12px 0;
+}
+.execution-steps li span {
+  display: block;
+  color: #6c7b72;
+}
+.execution-attempt {
+  overflow-wrap: anywhere;
+}
+.clarification-question {
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+.clarification-question label {
+  margin-top: 12px;
 }
