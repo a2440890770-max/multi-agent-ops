@@ -83,6 +83,7 @@ const task: TaskDetail = {
   currentApproval: approval,
   currentPublication: null,
   latestReflection: null,
+  errorMessage: null,
   workLock: null,
   actions: {
     save: unavailable,

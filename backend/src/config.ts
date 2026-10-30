@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readAuthConfig } from './auth-config.js';
+import { readExecutorMode } from './execution-config.js';
 
 const envPath = fileURLToPath(new URL('../../.env', import.meta.url));
 if (existsSync(envPath)) process.loadEnvFile(envPath);
@@ -19,4 +20,5 @@ export const config = {
     process.env.AGENT_BASE_URL || `http://127.0.0.1:${readPort(process.env.AGENT_PORT, 3002)}`,
   databaseUrl: process.env.DATABASE_URL || undefined,
   auth: readAuthConfig(process.env),
+  taskExecutorMode: readExecutorMode(process.env),
 };

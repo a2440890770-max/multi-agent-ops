@@ -10,7 +10,7 @@
 - `shared/src/generated/request-models.ts` 从请求 Schema 自动生成 OperationBodies/Queries/Params/Responses，前后端均可按 operationId 导入类型。`shared/src/responses.ts` 是响应映射；响应 JSON Schema 从 TypeScript 自动生成，不另维护后端 DTO。字段必填性和 null 含义以生成的 OpenAPI 为准。
 - [逐项接口参考](api-reference.md) 列出全部接口及字段。`GET /api/v1/openapi.json` 提供 OpenAPI 3.1 契约，`npm run contract:generate` 更新生成物，`npm run contract:check` 检查漂移。
 
-**当前实际能力：** 保留健康/就绪接口；D3 已实现登录、当前身份及退出的服务端 Session 接口并接通前端，配置与验收见[认证说明](../infra/auth.md)。其他业务路由已统一接入会话、角色及写入 Origin/CSRF 校验；未登录返回 `401`、角色越权返回 `403`。通过后校验请求结构并返回 `501 NOT_IMPLEMENTED`，不执行任务状态机、Agent 或外部发送；成员和配置管理等业务处理尚待实现，整个 D3 尚未全部验收。下述其他业务幂等、审计、原子边界及异步恢复仍为后续实现契约。
+**当前实际能力：** 保留健康/就绪接口；已实现登录、当前身份及退出的服务端 Session 接口并接通前端，配置与验收见[认证说明](../infra/auth.md)。业务路由统一校验会话、角色及写入 Origin/CSRF；未登录返回 `401`、角色越权返回 `403`。D4 已实现 `POST /api/v1/tasks`：原始要求、参考资料、创建人和团队持久化，团队已配置账号时自动绑定，未配置时 `task.accountId` 和 `account` 为 null，也可先创建草稿。任务、24 小时幂等记录及 `task.created` 审计同事务提交，成功返回 `201 TaskDetail`；创建不自动执行。`GET /api/v1/tasks/:taskId` 已实现同团队详情查询，返回当前数据库状态、原始要求、当前步骤及 `errorMessage`，未绑定账号正常返回；跨团队与不存在统一 404，读取无业务写入。`GET /api/v1/tasks` 已实现同团队历史、标题/编号搜索、状态 AND 筛选与稳定游标分页。前端 `/tasks`、`/tasks/new` 与 `/tasks/:taskId` 已接通这些接口，支持创建后跳转、刷新/重新打开、失败保留输入和同动作键手动重试。详见[任务接口说明](../infra/tasks.md)。模拟执行的启动、停止、从头重试和历史查询已实现，使用真实数据库保存尝试、步骤、模拟产出及状态流；支持同动作键确认重放与 revision 并发校验。澄清答复提交已接通，追加记录关联原任务、尝试、问题及成员；全部问题均非空答复后继续同一次模拟执行，部分答复继续暂停。其余业务处理仍返回 `501 NOT_IMPLEMENTED`，真实 Agent、输入语义检查和外部发送尚未实现，任务后续绑定接口也尚未实现；原样例详情单独位于 `/previews/tasks/:taskId`。下述其他业务幂等、审计、原子边界及异步恢复仍为后续实现契约。
 
 ## 通用 HTTP 与字段规则
 

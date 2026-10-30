@@ -19,6 +19,7 @@ export function loginDestination(search: string) {
       url.pathname,
     ) ||
     /^\/tasks\/[A-Za-z0-9_-]+$/.test(url.pathname) ||
+    /^\/previews\/tasks\/[A-Za-z0-9_-]+$/.test(url.pathname) ||
     /^\/evaluations\/[A-Za-z0-9_-]+\/blind$/.test(url.pathname)
   )
     return url.pathname + url.search + url.hash;

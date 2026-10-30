@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { Clarification, Failure, SourceRef } from '@multi-agent-ops/shared';
 import {
   type PgTableExtraConfigValue,
   boolean,
@@ -201,6 +202,7 @@ export const auditEvents = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     teamId: uuid('team_id'),
+    taskId: uuid('task_id'),
     actorType: varchar('actor_type', { length: 20 })
       .$type<'member' | 'worker' | 'system'>()
       .notNull(),
@@ -217,7 +219,13 @@ export const auditEvents = pgTable(
     requestId: varchar('request_id', { length: 128 }).notNull(),
     createdAt: createdAt(),
   },
-  (t) => [
+  (t): PgTableExtraConfigValue[] => [
+    index('audit_events_task_time_idx').on(t.taskId, t.createdAt.desc(), t.id.desc()),
+    foreignKey({
+      name: 'audit_events_task_fk',
+      columns: [t.taskId],
+      foreignColumns: [tasks.id],
+    }).onDelete('restrict'),
     index('audit_events_request_id_idx').on(t.requestId),
     index('audit_events_team_time_idx').on(t.teamId, t.createdAt.desc().nullsFirst()),
     check('audit_events_actor_type_check', sql`${t.actorType} IN ('member', 'worker', 'system')`),
@@ -259,33 +267,277 @@ export const idempotencyRecords = pgTable(
   ],
 );
 
-// Preserve the existing prototype table and its data. This is NOT the full Task
-// workflow model in shared/domain.ts; its later upgrade requires a new migration.
+// Preserve prototype data. D4 adds task ownership and execution metadata; this
+// is still not the full workflow model in shared/domain.ts.
 export const tasks = pgTable(
   'tasks',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     title: text('title').notNull(),
     originalRequest: text('original_request').notNull(),
-    executionStatus: text('execution_status')
-      .$type<
-        | 'awaiting_clarification'
-        | 'queued'
-        | 'running'
-        | 'needs_human'
-        | 'ready'
-        | 'failed'
-        | 'cancelled'
-      >()
-      .notNull()
-      .default('queued'),
+    executionStatus: text('execution_status').$type<
+      | 'awaiting_clarification'
+      | 'queued'
+      | 'running'
+      | 'needs_human'
+      | 'ready'
+      | 'failed'
+      | 'cancelled'
+    >(),
     createdAt: time('created_at').notNull().defaultNow(),
     updatedAt: time('updated_at').notNull().defaultNow(),
+    createdBy: uuid('created_by'),
+    teamId: uuid('team_id'),
+    currentStep: text('current_step'),
+    errorMessage: text('error_message'),
+    accountId: uuid('account_id'),
+    referenceInputs: jsonb('reference_inputs')
+      .$type<SourceRef[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    lifecycle: text('lifecycle')
+      .$type<'open' | 'terminated' | 'published'>()
+      .notNull()
+      .default('open'),
+    revision: integer('revision').notNull().default(1),
+    currentAttemptId: uuid('current_attempt_id'),
+    currentContentVersionId: uuid('current_content_version_id'),
+    workGeneration: integer('work_generation').notNull().default(0),
   },
-  (t) => [
+  (t): PgTableExtraConfigValue[] => [
+    foreignKey({
+      name: 'tasks_current_attempt_fk',
+      columns: [t.id, t.currentAttemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }),
+    foreignKey({
+      name: 'tasks_current_content_fk',
+      columns: [t.id, t.currentContentVersionId],
+      foreignColumns: [taskContents.taskId, taskContents.id],
+    }),
+    check('tasks_work_generation_check', sql`${t.workGeneration} >= 0`),
+    foreignKey({
+      name: 'tasks_created_by_fkey',
+      columns: [t.createdBy],
+      foreignColumns: [members.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'tasks_team_id_fkey',
+      columns: [t.teamId],
+      foreignColumns: [teams.id],
+    }).onDelete('restrict'),
+    index('tasks_team_created_at_idx').on(t.teamId, t.createdAt.desc().nullsFirst()),
+    index('tasks_created_by_idx').on(t.createdBy),
+    foreignKey({
+      name: 'tasks_account_id_fkey',
+      columns: [t.accountId],
+      foreignColumns: [accounts.id],
+    }).onDelete('restrict'),
+    check('tasks_reference_inputs_check', sql`jsonb_typeof(${t.referenceInputs}) = 'array'`),
+    check('tasks_lifecycle_check', sql`${t.lifecycle} IN ('open', 'terminated', 'published')`),
+    check('tasks_revision_check', sql`${t.revision} >= 1`),
     check(
       'tasks_execution_status_check',
       sql`${t.executionStatus} IN ('awaiting_clarification', 'queued', 'running', 'needs_human', 'ready', 'failed', 'cancelled')`,
     ),
+  ],
+);
+
+export type SimulationScenario = 'success' | 'failure' | 'clarification';
+export interface MockSnapshot {
+  executorVersion: 1;
+  mode: 'mock';
+  scenario: SimulationScenario;
+  originalRequest: string;
+  referenceInputs: SourceRef[];
+  inputRevision: number;
+  stepDelayMs: number;
+}
+
+export const executionAttempts = pgTable(
+  'execution_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    attemptNo: integer('attempt_no').notNull(),
+    generation: integer('generation').notNull(),
+    status: text('status')
+      .$type<'queued' | 'running' | 'awaiting_clarification' | 'ready' | 'failed' | 'cancelled'>()
+      .notNull(),
+    currentStep: text('current_step'),
+    autoRevisionCount: integer('auto_revision_count').notNull().default(0),
+    configVersion: integer('config_version').notNull().default(1),
+    executorMode: text('executor_mode').$type<'mock'>().notNull().default('mock'),
+    simulationScenario: text('simulation_scenario').$type<SimulationScenario>().notNull(),
+    configSnapshot: jsonb('config_snapshot').$type<MockSnapshot>().notNull(),
+    clarifications: jsonb('clarifications')
+      .$type<Clarification[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    requestedBy: uuid('requested_by').notNull(),
+    createdAt: createdAt(),
+    startedAt: time('started_at'),
+    finishedAt: time('finished_at'),
+    cancelScope: text('cancel_scope').$type<'stop_attempt'>(),
+    cancelRequestedAt: time('cancel_requested_at'),
+    cancelRequestedBy: uuid('cancel_requested_by'),
+    cancelReason: text('cancel_reason'),
+    stoppedAt: time('stopped_at'),
+    error: jsonb('error').$type<Failure>(),
+    nextRunAt: time('next_run_at'),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('execution_attempts_task_id_id_key').on(t.taskId, t.id),
+    unique('execution_attempts_task_no_key').on(t.taskId, t.attemptNo),
+    uniqueIndex('execution_attempts_active_task_idx')
+      .on(t.taskId)
+      .where(sql`${t.status} IN ('queued', 'running', 'awaiting_clarification')`),
+    index('execution_attempts_due_idx')
+      .on(t.nextRunAt)
+      .where(sql`${t.status} IN ('queued', 'running')`),
+    foreignKey({
+      name: 'execution_attempts_task_fk',
+      columns: [t.taskId],
+      foreignColumns: [tasks.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'execution_attempts_requested_by_fk',
+      columns: [t.requestedBy],
+      foreignColumns: [members.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'execution_attempts_cancel_by_fk',
+      columns: [t.cancelRequestedBy],
+      foreignColumns: [members.id],
+    }).onDelete('restrict'),
+    check(
+      'execution_attempts_counts_check',
+      sql`${t.attemptNo} >= 1 AND ${t.generation} >= 1 AND ${t.configVersion} >= 1 AND ${t.autoRevisionCount} = 0`,
+    ),
+    check(
+      'execution_attempts_status_check',
+      sql`${t.status} IN ('queued', 'running', 'awaiting_clarification', 'ready', 'failed', 'cancelled')`,
+    ),
+    check('execution_attempts_mode_check', sql`${t.executorMode} = 'mock'`),
+    check(
+      'execution_attempts_scenario_check',
+      sql`${t.simulationScenario} IN ('success', 'failure', 'clarification')`,
+    ),
+    check(
+      'execution_attempts_cancel_scope_check',
+      sql`${t.cancelScope} IS NULL OR ${t.cancelScope} = 'stop_attempt'`,
+    ),
+    check(
+      'execution_attempts_snapshot_check',
+      sql`jsonb_typeof(${t.configSnapshot}) = 'object' AND jsonb_typeof(${t.clarifications}) = 'array'`,
+    ),
+    check(
+      'execution_attempts_finish_check',
+      sql`(${t.status} IN ('ready','failed','cancelled')) = (${t.finishedAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const executionSteps = pgTable(
+  'execution_steps',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    attemptId: uuid('attempt_id').notNull(),
+    ordinal: integer('ordinal').notNull(),
+    role: text('role').$type<'supervisor' | 'research' | 'content' | 'review'>().notNull(),
+    status: text('status')
+      .$type<'queued' | 'running' | 'completed' | 'failed' | 'cancelled'>()
+      .notNull()
+      .default('queued'),
+    startedAt: time('started_at'),
+    finishedAt: time('finished_at'),
+    durationMs: integer('duration_ms'),
+    error: jsonb('error').$type<Failure>(),
+  },
+  (t) => [
+    unique('execution_steps_attempt_ordinal_key').on(t.attemptId, t.ordinal),
+    foreignKey({
+      name: 'execution_steps_attempt_fk',
+      columns: [t.attemptId],
+      foreignColumns: [executionAttempts.id],
+    }).onDelete('restrict'),
+    check('execution_steps_ordinal_check', sql`${t.ordinal} BETWEEN 0 AND 3`),
+    check(
+      'execution_steps_role_check',
+      sql`${t.role} IN ('supervisor','research','content','review')`,
+    ),
+    check(
+      'execution_steps_status_check',
+      sql`${t.status} IN ('queued','running','completed','failed','cancelled')`,
+    ),
+    check('execution_steps_duration_check', sql`${t.durationMs} >= 0`),
+  ],
+);
+
+export const clarificationAnswers = pgTable(
+  'clarification_answers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    questionId: uuid('question_id').notNull(),
+    question: text('question').notNull(),
+    answer: text('answer').notNull(),
+    answeredBy: uuid('answered_by').notNull(),
+    answeredAt: time('answered_at').notNull().defaultNow(),
+  },
+  (t) => [
+    unique('clarification_answers_attempt_question_key').on(t.attemptId, t.questionId),
+    index('clarification_answers_task_idx').on(t.taskId),
+    foreignKey({
+      name: 'clarification_answers_attempt_fk',
+      columns: [t.taskId, t.attemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'clarification_answers_member_fk',
+      columns: [t.answeredBy],
+      foreignColumns: [members.id],
+    }).onDelete('restrict'),
+    check(
+      'clarification_answers_text_check',
+      sql`char_length(${t.answer}) BETWEEN 1 AND 4000 AND char_length(btrim(${t.answer})) > 0 AND char_length(${t.question}) BETWEEN 1 AND 4000`,
+    ),
+  ],
+);
+
+export const taskContents = pgTable(
+  'task_contents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    originAttemptId: uuid('origin_attempt_id').notNull(),
+    versionNo: integer('version_no').notNull(),
+    body: text('body').notNull(),
+    contentHash: text('content_hash').notNull(),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('task_contents_task_id_id_key').on(t.taskId, t.id),
+    unique('task_contents_task_version_key').on(t.taskId, t.versionNo),
+    unique('task_contents_attempt_key').on(t.originAttemptId),
+    foreignKey({
+      name: 'task_contents_task_fk',
+      columns: [t.taskId],
+      foreignColumns: [tasks.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'task_contents_attempt_fk',
+      columns: [t.taskId, t.originAttemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'task_contents_creator_fk',
+      columns: [t.createdBy],
+      foreignColumns: [members.id],
+    }).onDelete('restrict'),
+    check('task_contents_version_check', sql`${t.versionNo} >= 1`),
+    check('task_contents_hash_check', sql`${t.contentHash} ~ '^[a-f0-9]{64}$'`),
   ],
 );

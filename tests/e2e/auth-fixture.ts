@@ -4,11 +4,19 @@ import type { Role, Session } from '@multi-agent-ops/shared';
 
 export async function mockAuth(
   page: Page,
-  options: { authenticated?: boolean; role?: Role; expiresAt?: string } = {},
+  options: {
+    authenticated?: boolean;
+    role?: Role;
+    expiresAt?: string;
+    teamId?: string;
+    memberId?: string;
+  } = {},
 ) {
   const state = {
     authenticated: options.authenticated ?? true,
     role: options.role ?? 'operator',
+    teamId: options.teamId ?? 'ui-team',
+    memberId: options.memberId ?? 'ui-member',
     expiresAt: options.expiresAt ?? new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
     failLogin: 0,
     failMe: 0,
@@ -18,8 +26,8 @@ export async function mockAuth(
   const requests: { operation: string; key: string | undefined; csrf: string | undefined }[] = [];
   const session = (): Session => ({
     member: {
-      id: 'ui-member',
-      teamId: 'ui-team',
+      id: state.memberId,
+      teamId: state.teamId,
       displayName: '测试成员',
       role: state.role,
       status: 'active',
@@ -81,6 +89,29 @@ export async function mockAuth(
       json: { data: { signedOut: true }, meta: { requestId: 'ui-test', replayed: false } },
     });
   });
+  await page.route(/\/api\/v1\/tasks(?:\?.*)?$/, (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({
+          json: {
+            data: { items: [], nextCursor: null },
+            meta: { requestId: 'ui-list', replayed: false },
+          },
+        })
+      : route.fallback(),
+  );
+  await page.route(/\/api\/v1\/tasks\/[^/?]+\/history(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          attempts: [],
+          steps: [],
+          clarificationAnswers: [],
+          audit: { items: [], nextCursor: null },
+        },
+        meta: { requestId: 'ui-history', replayed: false },
+      },
+    }),
+  );
   return { state, requests };
 }
 

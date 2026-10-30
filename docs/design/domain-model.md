@@ -52,18 +52,18 @@ PRD 既有约束继续适用：审核与人工批准分离；确定性阻断不�
 
 ### 3.1 Task：任务
 
-| 字段                                                   | 含义与约束                                                                |
-| ------------------------------------------------------ | ------------------------------------------------------------------------- |
-| id、teamId、accountId、createdBy、createdAt、updatedAt | 任务标识、归属、固定发布账号及创建信息                                    |
-| originalRequest、clarifications、referenceInputs       | 原始要求、澄清答复及参考资料；修改要求保留历史                            |
-| lifecycle                                              | open / terminated / published；用于管理任务终止和发布终结，不替代四类状态 |
-| currentAttemptId                                       | 当前完整执行尝试；历史尝试继续可查                                        |
-| currentContentVersionId                                | 当前工作版本；不将旧尝试内容静默当成新产出                                |
-| currentReviewCycleId、currentApprovalId                | 当前版本适用的审核周期及批准引用，可为空                                  |
-| activePublishOperationId、publishedOperationId         | 未决实际发布操作、最终成功发布操作，可为空                                |
-| sourceTaskId                                           | 复制来源；新任务不得继承旧批准或发布资格                                  |
-| revision                                               | 并发校验号，写入时比较并原子递增                                          |
-| terminatedBy、terminatedAt、terminationReason          | 任务终止记录；与停止一次执行不同                                          |
+| 字段                                                   | 含义与约束                                                                                |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| id、teamId、accountId、createdBy、createdAt、updatedAt | 任务标识、归属、固定发布账号及创建信息；草稿 accountId 可为空，账号相关执行和发布前需绑定 |
+| originalRequest、clarifications、referenceInputs       | 原始要求、澄清答复及参考资料；修改要求保留历史                                            |
+| lifecycle                                              | open / terminated / published；用于管理任务终止和发布终结，不替代四类状态                 |
+| currentAttemptId                                       | 当前完整执行尝试；历史尝试继续可查                                                        |
+| currentContentVersionId                                | 当前工作版本；不将旧尝试内容静默当成新产出                                                |
+| currentReviewCycleId、currentApprovalId                | 当前版本适用的审核周期及批准引用，可为空                                                  |
+| activePublishOperationId、publishedOperationId         | 未决实际发布操作、最终成功发布操作，可为空                                                |
+| sourceTaskId                                           | 复制来源；新任务不得继承旧批准或发布资格                                                  |
+| revision                                               | 并发校验号，写入时比较并原子递增                                                          |
+| terminatedBy、terminatedAt、terminationReason          | 任务终止记录；与停止一次执行不同                                                          |
 
 不将 execution、approval、publication、reflection 合并成一个“大状态”。任务详情分别读取相关对象的状态。
 

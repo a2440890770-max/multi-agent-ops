@@ -25,13 +25,17 @@ export interface OperationBodies {
     attemptId: string;
     answers: { questionId: string; answer: string }[];
   };
-  startTask: { expectedRevision: number };
+  startTask: {
+    expectedRevision: number;
+    simulationScenario?: 'success' | 'failure' | 'clarification';
+  };
   stopAttempt: { expectedRevision: number; reason: string };
   retryTask: {
     expectedRevision: number;
     previousAttemptId: string | null;
     restartTerminated: boolean;
     reason: string;
+    simulationScenario?: 'success' | 'failure' | 'clarification';
   };
   terminateTask: { expectedRevision: number; reason: string };
   copyTask: { expectedRevision: number; sourceContentVersionId: string | null; title: string };

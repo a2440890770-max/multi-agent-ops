@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Overview } from './pages/Overview.js';
-import { Tasks, CreateTask, Memories, Evaluations, Settings } from './pages/Workspace.js';
+import { Memories, Evaluations, Settings } from './pages/Workspace.js';
+import { Tasks } from './pages/Tasks.js';
+import { CreateTask } from './pages/CreateTask.js';
 import { Login } from './pages/Login.js';
 import { TaskDetailPage } from './pages/TaskDetail.js';
+import { PreviewTaskDetailPage } from './pages/PreviewTaskDetail.js';
 import { Empty, Notice } from './components.js';
 import { useAuth } from './auth.js';
 import { navigate as navigateTo } from './navigation.js';
@@ -50,7 +53,7 @@ export function App() {
     };
   }, []);
   const path = location.split('?')[0]!;
-  const protectedPage = ['/tasks', '/memories', '/evaluations', '/settings'].some(
+  const protectedPage = ['/tasks', '/previews', '/memories', '/evaluations', '/settings'].some(
     (prefix) => path === prefix || path.startsWith(prefix + '/'),
   );
   useEffect(() => {
@@ -61,19 +64,32 @@ export function App() {
     document.title = `${navigation.find((n) => n.path !== '/' && path.startsWith(n.path))?.label ?? (path === '/login' ? '成员登录' : '项目概览')} · Agent Ops`;
   }, [path]);
   const taskMatch = /^\/tasks\/([A-Za-z0-9_-]+)$/.exec(path);
+  const previewMatch = /^\/previews\/tasks\/([A-Za-z0-9_-]+)$/.exec(path);
+  const liveTaskPage = path === '/tasks' || !!taskMatch;
   const currentNav = navigation.find((item) =>
-    item.path === '/' ? path === '/' : path.startsWith(item.path),
+    item.path === '/'
+      ? path === '/'
+      : path.startsWith(item.path) || (item.path === '/tasks' && !!previewMatch),
   );
   let page;
   if (path === '/') page = <Overview />;
   else if (path === '/login') page = <Login search={location.split('?')[1] ?? ''} />;
-  else if (path === '/tasks') page = <Tasks />;
-  else if (path === '/tasks/new') page = <CreateTask />;
+  else if (path === '/tasks')
+    page = <Tasks key={`${auth.session?.member.teamId}:${auth.session?.member.id}`} />;
+  else if (path === '/tasks/new')
+    page = <CreateTask key={`${auth.session?.member.teamId}:${auth.session?.member.id}`} />;
   else if (taskMatch)
     page = (
       <TaskDetailPage
-        key={taskMatch[1]}
+        key={`${auth.session?.member.teamId}:${auth.session?.member.id}:${taskMatch[1]}`}
         taskId={taskMatch[1]!}
+      />
+    );
+  else if (previewMatch)
+    page = (
+      <PreviewTaskDetailPage
+        key={previewMatch[1]}
+        taskId={previewMatch[1]!}
         search={location.split('?')[1] ?? ''}
       />
     );
@@ -132,8 +148,8 @@ export function App() {
         <div className="account-card">
           <span className="avatar">微</span>
           <div>
-            <strong>品牌官方微博</strong>
-            <small>单账号 · 纯文案</small>
+            <strong>微博运营账号</strong>
+            <small>在任务详情查看绑定状态</small>
           </div>
         </div>
         <div className="sidebar-footer">
@@ -164,10 +180,21 @@ export function App() {
             工作区 / <strong>{currentNav?.label ?? '成员入口'}</strong>
           </span>
           <span className="stage">
-            D3 · {path === '/login' ? '成员登录' : path === '/' ? '工程与连接' : '业务页面预览'}
+            D4 ·{' '}
+            {path === '/login'
+              ? '成员登录'
+              : path === '/'
+                ? '工程与连接'
+                : liveTaskPage
+                  ? path === '/tasks'
+                    ? '任务列表'
+                    : path === '/tasks/new'
+                      ? '创建任务'
+                      : '任务详情'
+                  : '业务页面预览'}
           </span>
         </header>
-        {path !== '/' && path !== '/login' && auth.status === 'authenticated' && (
+        {path !== '/' && path !== '/login' && !liveTaskPage && auth.status === 'authenticated' && (
           <div className="preview-banner">
             <span>业务预览</span>登录身份已验证；业务内容使用示例数据，操作不会保存或实际发布。
           </div>

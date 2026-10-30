@@ -4,9 +4,13 @@ import { createApp } from './app.js';
 import { config } from './config.js';
 import { createBusinessDatabase } from './database.js';
 import { AuthService } from './auth.js';
+import { TaskService } from './task-service.js';
+import { MockTaskExecutor } from './mock-task-executor.js';
 
 const business = config.databaseUrl ? createBusinessDatabase(config.databaseUrl) : undefined;
 const auth = business && config.auth ? new AuthService(business.db, config.auth) : undefined;
+const executor =
+  business && config.taskExecutorMode === 'mock' ? new MockTaskExecutor(business.db) : undefined;
 
 const pool = config.databaseUrl
   ? new pg.Pool({
@@ -18,6 +22,13 @@ const pool = config.databaseUrl
 pool?.on('error', () => console.error('数据库空闲连接异常，请检查本地数据库状态。'));
 const app = createApp({
   ...(auth ? { auth } : {}),
+  ...(business
+    ? {
+        tasks: new TaskService(business.db, () => new Date(), {
+          executorMode: config.taskExecutorMode,
+        }),
+      }
+    : {}),
   async checkDatabase() {
     if (!pool) return { status: 'not_ready', database: 'unconfigured' };
     try {
@@ -35,7 +46,11 @@ const app = createApp({
     return (await response.json()) as AgentHealth;
   },
 });
+app.addHook('onReady', async () => {
+  executor?.start();
+});
 app.addHook('onClose', async () => {
+  await executor?.stop();
   await pool?.end();
   await business?.close();
 });

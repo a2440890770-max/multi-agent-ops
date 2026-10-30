@@ -438,11 +438,32 @@ test('全部业务契约覆盖未登录 401、运营管理操作 403、允许身
       [admin, 'admin'],
     ]) {
       const result = await businessRequest(endpoint.operationId, identity);
-      const status = !identity ? 401 : endpoint.roles.includes(role) ? 501 : 403;
+      const status = !identity
+        ? 401
+        : !endpoint.roles.includes(role)
+          ? 403
+          : [
+                'createTask',
+                'getTask',
+                'listTasks',
+                'startTask',
+                'retryTask',
+                'stopAttempt',
+                'taskHistory',
+                'clarifyTask',
+              ].includes(endpoint.operationId)
+            ? 503
+            : 501;
       assert.equal(result.statusCode, status, `${endpoint.operationId}/${role}: ${result.body}`);
       assert.equal(
         result.json().error.code,
-        status === 401 ? 'UNAUTHENTICATED' : status === 403 ? 'FORBIDDEN' : 'NOT_IMPLEMENTED',
+        status === 401
+          ? 'UNAUTHENTICATED'
+          : status === 403
+            ? 'FORBIDDEN'
+            : status === 503
+              ? 'DEPENDENCY_UNAVAILABLE'
+              : 'NOT_IMPLEMENTED',
       );
       assert.ok(result.json().meta.requestId);
       assert.equal(result.headers['cache-control'], 'no-store');
@@ -473,14 +494,15 @@ test('业务写入验证可信 Origin 和会话绑定 CSRF，读取不要求写�
       assert.equal(result.statusCode, 403, result.body);
       assert.equal(result.json().error.code, 'FORBIDDEN');
     }
-    assert.equal((await businessRequest('createTask', identity)).statusCode, 501);
+    // This authorization fixture deliberately leaves task persistence unconfigured.
+    assert.equal((await businessRequest('createTask', identity)).statusCode, 503);
     assert.equal(
       (
         await businessRequest('listTasks', identity, {
           headers: { origin: undefined, 'x-csrf-token': undefined, 'idempotency-key': undefined },
         })
       ).statusCode,
-      501,
+      503,
     );
   }
 });
@@ -534,7 +556,7 @@ test('业务请求逐次复核角色；降级、升级、禁用、撤销、改�
   assert.equal((await businessRequest('listMembers', identity)).statusCode, 403);
   assert.equal((await businessRequest('getConfig', identity)).statusCode, 403);
   assert.equal((await businessRequest('updateConfig', identity)).statusCode, 403);
-  assert.equal((await businessRequest('listTasks', identity)).statusCode, 501);
+  assert.equal((await businessRequest('listTasks', identity)).statusCode, 503);
   await client.query("UPDATE members SET role='admin',version=version+1 WHERE id=$1", [memberId]);
   assert.equal((await businessRequest('listMembers', identity)).statusCode, 501);
   assert.equal((await businessRequest('updateConfig', identity)).statusCode, 501);
