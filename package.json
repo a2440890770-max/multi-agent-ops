@@ -24,7 +24,7 @@
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "npm run build --workspace=shared && npm run test --workspaces --if-present",
+    "test": "node --test scripts/setup.test.mjs && npm run build --workspace=shared && npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
     "check": "npm run contract:check && npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
     "env:setup": "node scripts/setup.mjs",

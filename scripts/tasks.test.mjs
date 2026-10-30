@@ -322,9 +322,10 @@ test('创建遵循已有 201 契约，原文、创建人、团队、固定账号
   assert.equal(data.approval, 'not_requested');
   assert.equal(data.publication, 'not_published');
   assert.equal(data.actions.start.allowed, true);
+  assert.equal(data.actions.save.allowed, true);
   assert.ok(
     Object.entries(data.actions)
-      .filter(([name]) => name !== 'start')
+      .filter(([name]) => !['start', 'save'].includes(name))
       .every(([, a]) => !a.allowed && a.reason),
   );
   const row = (await client.query('SELECT * FROM tasks WHERE id=$1', [data.task.id])).rows[0];
@@ -858,9 +859,13 @@ test('详情投影持久化执行状态和错误，兼容原型 needs_human 状�
     assert.equal(response.json().data.errorMessage, '步骤错误说明');
     assert.equal(response.json().data.currentAttempt, null);
     assert.equal(response.json().data.actions.start.allowed, status === null);
+    assert.equal(
+      response.json().data.actions.save.allowed,
+      !['queued', 'running', 'awaiting_clarification'].includes(status),
+    );
     assert.ok(
       Object.entries(response.json().data.actions)
-        .filter(([name]) => name !== 'start')
+        .filter(([name]) => !['start', 'save'].includes(name))
         .every(([, action]) => !action.allowed),
     );
   }

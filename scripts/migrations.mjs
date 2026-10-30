@@ -5,6 +5,7 @@ import pg from 'pg';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { loadEnvironment, safeError } from './postgres-admin.mjs';
 import { businessTables, firstDifference, inspectBusinessSchema } from './migration-catalog.mjs';
+import { isCompatibleMigration, verifyCompatibleMigration } from './compatible-migrations.mjs';
 
 export const migrationsFolder = fileURLToPath(new URL('../backend/drizzle/', import.meta.url));
 const ledger = 'drizzle.__drizzle_migrations';
@@ -65,11 +66,22 @@ export async function runMigrations(client, action, folder = migrationsFolder) {
     await client.query("SET LOCAL lock_timeout = '5s'");
     await client.query('SET LOCAL search_path = public, pg_catalog');
     await client.query('SELECT pg_advisory_xact_lock(1835100527, 168101)');
-    const history = await readHistory(client);
+    const recorded = await readHistory(client);
+    const compatible = recorded.filter(isCompatibleMigration);
+    const history = recorded.filter((row) => !isCompatibleMigration(row));
     validateHistory(history, migrations);
+    if (compatible.length) {
+      if (compatible.length !== 1 || !history.length)
+        throw new Error('兼容迁移记录重复或缺少初始基线，拒绝升级。');
+      await verifyCompatibleMigration(client);
+    }
     if (action === 'status') {
       await client.query('COMMIT');
-      return { applied: history.length, pending: migrations.length - history.length };
+      return {
+        applied: history.length,
+        pending: migrations.length - history.length,
+        ...(compatible.length ? { retainedCompatible: compatible.length } : {}),
+      };
     }
     if (action === 'adopt') {
       if (!history.length) throw new Error('请先核对并登记初始基线，再接管增量迁移。');

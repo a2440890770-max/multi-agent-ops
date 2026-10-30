@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import type { Failure } from '@multi-agent-ops/shared';
 import type { createBusinessDatabase } from './database.js';
 import { mockStages } from './execution-model.js';
@@ -206,6 +206,15 @@ export class MockTaskExecutor {
                   taskId: task.id,
                   originAttemptId: attempt.id,
                   versionNo: (count?.max ?? 0) + 1,
+                  parentVersionId:
+                    (
+                      await tx
+                        .select({ id: taskContents.id })
+                        .from(taskContents)
+                        .where(eq(taskContents.taskId, task.id))
+                        .orderBy(desc(taskContents.versionNo))
+                        .limit(1)
+                    )[0]?.id ?? null,
                   body,
                   contentHash: createHash('sha256').update(body).digest('hex'),
                   createdBy: attempt.requestedBy,

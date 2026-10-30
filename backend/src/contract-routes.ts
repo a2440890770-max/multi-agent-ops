@@ -11,13 +11,14 @@ import { registerBusinessAuthorization } from './authorization.js';
 import { AuthError } from './auth.js';
 import type { AuthService } from './auth.js';
 import type { TaskService } from './task-service.js';
+import { editorialOperations } from './editorial-service.js';
 
 export function registerContractRoutes(
   app: FastifyInstance,
   auth: AuthService | undefined,
   tasks?: Pick<
     TaskService,
-    'create' | 'get' | 'list' | 'start' | 'retry' | 'stop' | 'history' | 'clarify'
+    'create' | 'get' | 'list' | 'start' | 'retry' | 'stop' | 'history' | 'clarify' | 'editorial'
   >,
 ) {
   app.get('/api/v1/openapi.json', async () => getOpenApiDocument());
@@ -55,6 +56,24 @@ export function registerContractRoutes(
           },
         },
         handler: async (request, reply) => {
+          if (editorialOperations.has(endpoint.operationId)) {
+            if (!tasks)
+              throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '人工编辑审核服务尚未配置。');
+            if (!request.authSession) throw new AuthError(401, 'UNAUTHENTICATED', '请重新登录。');
+            const result = await tasks.editorial({
+              operation: endpoint.operationId,
+              actor: request.authSession.member,
+              params: request.params as Record<string, string>,
+              query: request.query as Record<string, unknown>,
+              body: request.body,
+              key: request.headers['idempotency-key'] as string,
+              requestId: request.id,
+            });
+            return reply.code(result.status).send({
+              data: result.data,
+              meta: { requestId: request.id, replayed: result.replayed },
+            });
+          }
           if (
             ['startTask', 'retryTask', 'stopAttempt', 'taskHistory', 'clarifyTask'].includes(
               endpoint.operationId,

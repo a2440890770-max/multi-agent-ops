@@ -46,6 +46,8 @@ const app = createApp({
     return (await response.json()) as AgentHealth;
   },
 });
+if (business && !config.auth)
+  app.log.warn('登录服务未启用：缺少 AUTH_SECRET。请运行 npm run env:setup 后重启后端。');
 app.addHook('onReady', async () => {
   executor?.start();
 });

@@ -4,8 +4,9 @@ import { Notice, PageTitle } from '../components.js';
 import { useAuth } from '../auth.js';
 import { getTaskDetail, TaskRequestError } from '../task-api.js';
 import { approvalLabels, executionLabels, publicationLabels } from '../task-labels.js';
-import { TaskExecutionControls, TaskExecutionHistory } from './TaskExecution.js';
+import { TaskExecutionControls, TaskExecutionHistory, useTaskExecution } from './TaskExecution.js';
 import { TaskClarifications } from './TaskClarifications.js';
+import { ManualEditorial } from './ManualEditorial.js';
 
 type LoadState =
   | { status: 'loading' }
@@ -105,17 +106,28 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
       </>
     );
   }
-  const { detail } = state;
-  const { task } = detail;
   return (
     <>
       {back}
+      <LoadedTaskDetail key={taskId} detail={state.detail} reload={reload} />
+    </>
+  );
+}
+
+function LoadedTaskDetail({ detail, reload }: { detail: TaskDetail; reload: () => void }) {
+  const execution = useTaskExecution(detail, reload);
+  const { task } = detail;
+  return (
+    <>
       <PageTitle
         eyebrow="TASK DETAIL"
         title={task.title}
         description={`创建于 ${date(task.createdAt)} · 更新于 ${date(task.updatedAt)}`}
       >
         <button onClick={reload}>刷新详情</button>
+        <a className="button" href="#manual-editor-title">
+          编辑与审核
+        </a>
       </PageTitle>
       <div className="status-strip">
         {[
@@ -179,22 +191,31 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
           </section>
           {detail.currentContent && (
             <section className="panel detail-panel">
-              <h2>模拟产出</h2>
-              <Notice tone="warning">仅用于流程验证，不代表真实研究或审核结果。</Notice>
-              <div className="task-original" data-testid="mock-output">
+              <h2>当前版本预览</h2>
+              {detail.currentContent.sourceKind === 'agent' && (
+                <Notice tone="warning">模拟产出仅用于流程验证，不代表真实研究或审核结果。</Notice>
+              )}
+              <div
+                className="task-original"
+                data-testid={
+                  detail.currentContent.sourceKind === 'agent' ? 'mock-output' : 'current-preview'
+                }
+              >
                 {detail.currentContent.body}
               </div>
             </section>
           )}
+          <ManualEditorial detail={detail} onChanged={reload} />
           <TaskClarifications
             key={task.currentAttemptId ?? 'none'}
             detail={detail}
             onChanged={reload}
+            execution={execution}
           />
           <TaskExecutionHistory taskId={task.id} revision={task.revision} />
         </div>
         <aside>
-          <TaskExecutionControls detail={detail} onChanged={reload} />
+          <TaskExecutionControls detail={detail} execution={execution} />
           <section className="panel detail-panel" aria-labelledby="task-info-title">
             <h2 id="task-info-title">任务信息</h2>
             <dl className="task-metadata">
@@ -230,7 +251,9 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
           </section>
           <section className="panel detail-panel">
             <h2>后续操作</h2>
-            <p className="muted">真实模型执行、审核和发布功能尚未接入。</p>
+            <p className="muted">
+              人工编辑、基础审核与版本批准已接通。真实模型执行及对外发布尚未接入。
+            </p>
             <div className="button-row">
               <button disabled>发布内容</button>
             </div>

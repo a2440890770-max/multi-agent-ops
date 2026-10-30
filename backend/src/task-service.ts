@@ -8,6 +8,9 @@ import type {
   Session,
   TaskDetail,
   TaskSummary,
+  ReviewCycle,
+  Approval,
+  ManualDecision,
 } from '@multi-agent-ops/shared';
 import { AuthError } from './auth.js';
 import type { createBusinessDatabase } from './database.js';
@@ -19,9 +22,15 @@ import {
   idempotencyRecords,
   members,
   tasks,
+  taskReviews,
+  taskApprovals,
+  taskDecisions,
 } from './schema.js';
 import { activeAttempt, attemptModel, contentModel } from './execution-model.js';
 import { TaskExecutionService } from './task-execution-service.js';
+import { EditorialService } from './editorial-service.js';
+import type { EditorialRequest } from './editorial-service.js';
+import { reviewEligible } from './manual-review.js';
 
 type Database = ReturnType<typeof createBusinessDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -36,12 +45,20 @@ function taskDetail(
   attempt: typeof executionAttempts.$inferSelect | null = null,
   content: typeof taskContents.$inferSelect | null = null,
   enabled = true,
+  workflow: {
+    review?: ReviewCycle | null;
+    approval?: Approval | null;
+    decision?: ManualDecision | null;
+    configVersion?: number | null;
+  } = {},
 ): TaskDetail {
   if (!task.teamId || !task.createdBy)
     throw new AuthError(409, 'INVALID_STATE', '历史任务归属信息不完整，请联系管理员核对后补齐。');
   if (task.accountId && !account)
     throw new AuthError(409, 'INVALID_STATE', '任务绑定的账号不可用，请联系管理员核对团队归属。');
   const unavailable = { allowed: false, reason: '该操作尚未实现。' };
+  const editingLocked =
+    activeAttempt(task.executionStatus ?? '') || !!(attempt && activeAttempt(attempt.status));
   return {
     task: {
       id: task.id,
@@ -56,8 +73,8 @@ function taskDetail(
       clarifications: attempt?.clarifications ?? [],
       currentAttemptId: task.currentAttemptId,
       currentContentVersionId: task.currentContentVersionId,
-      currentReviewCycleId: null,
-      currentApprovalId: null,
+      currentReviewCycleId: task.currentReviewCycleId,
+      currentApprovalId: task.currentApprovalId,
       activePublishOperationId: null,
       publishedOperationId: null,
       sourceTaskId: null,
@@ -68,15 +85,15 @@ function taskDetail(
       updatedAt: task.updatedAt.toISOString(),
     },
     execution: task.executionStatus === 'needs_human' ? 'manual_required' : task.executionStatus,
-    approval: 'not_requested',
+    approval: task.approvalStatus,
     publication: 'not_published',
     reflection: 'not_triggered',
     currentStep: task.currentStep,
     errorMessage: task.errorMessage,
     currentAttempt: attempt ? attemptModel(attempt) : null,
     currentContent: content ? contentModel(content) : null,
-    currentReview: null,
-    currentApproval: null,
+    currentReview: workflow.review ?? null,
+    currentApproval: workflow.approval ?? null,
     currentPublication: null,
     latestReflection: null,
     workLock:
@@ -90,7 +107,14 @@ function taskDetail(
         : null,
     account,
     actions: {
-      save: unavailable,
+      save: {
+        allowed: task.lifecycle === 'open' && !editingLocked,
+        reason: editingLocked
+          ? '请先停止或等待当前执行完成。'
+          : task.lifecycle !== 'open'
+            ? '任务已结束。'
+            : null,
+      },
       start: {
         allowed: enabled && task.lifecycle === 'open' && !attempt && task.executionStatus === null,
         reason: !enabled
@@ -127,8 +151,28 @@ function taskDetail(
                 : null,
       },
       copy: unavailable,
-      review: unavailable,
-      approve: unavailable,
+      review: {
+        allowed:
+          task.lifecycle === 'open' &&
+          !!content &&
+          content.sourceKind === 'manual' &&
+          !editingLocked,
+        reason:
+          content?.sourceKind !== 'manual'
+            ? '请先人工编辑并保存文案。'
+            : editingLocked
+              ? '请先结束当前执行。'
+              : null,
+      },
+      approve: {
+        allowed:
+          task.lifecycle === 'open' &&
+          !editingLocked &&
+          workflow.review?.currentVersionId === content?.id &&
+          workflow.review?.configVersion === workflow.configVersion &&
+          reviewEligible(workflow.review, workflow.decision),
+        reason: '需完成当前版本的基础审核并解决阻断及主观意见。',
+      },
       publish: unavailable,
       backfill: unavailable,
       verify: unavailable,
@@ -144,6 +188,14 @@ export class TaskService {
     private now: () => Date = () => new Date(),
     private options: { executorMode?: 'mock' | 'disabled'; stepDelayMs?: number } = {},
   ) {}
+
+  editorial(input: EditorialRequest) {
+    return new EditorialService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+    ).handle(input);
+  }
 
   private execution() {
     return new TaskExecutionService(
@@ -215,6 +267,9 @@ export class TaskService {
           task: tasks,
           attempt: executionAttempts,
           content: taskContents,
+          review: taskReviews.data,
+          approval: taskApprovals.data,
+          configVersion: accounts.currentConfigVersion,
           // Preserve PostgreSQL microseconds for keyset pagination; JS Dates truncate them.
           time: sql<string>`to_char(${tasks.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
           account: {
@@ -255,6 +310,14 @@ export class TaskService {
             eq(taskContents.taskId, tasks.id),
           ),
         )
+        .leftJoin(
+          taskReviews,
+          and(eq(taskReviews.id, tasks.currentReviewCycleId), eq(taskReviews.taskId, tasks.id)),
+        )
+        .leftJoin(
+          taskApprovals,
+          and(eq(taskApprovals.id, tasks.currentApprovalId), eq(taskApprovals.taskId, tasks.id)),
+        )
         .where(
           and(
             eq(tasks.teamId, actor.teamId),
@@ -265,9 +328,8 @@ export class TaskService {
                   query.execution === 'manual_required' ? 'needs_human' : query.execution,
                 )
               : undefined,
-            // Approval and publishing workflows are not stored yet. Filter the same
-            // values returned by the current summary rather than inventing workflow state.
-            query.approval && query.approval !== 'not_requested' ? sql`false` : undefined,
+            // Approval status is persisted and updated atomically with its bound version.
+            query.approval ? eq(tasks.approvalStatus, query.approval) : undefined,
             query.publication && query.publication !== 'not_published' ? sql`false` : undefined,
             search
               ? or(sql`${tasks.title} ILIKE ${search}`, sql`${tasks.id}::text ILIKE ${search}`)
@@ -282,13 +344,14 @@ export class TaskService {
       const page = rows.slice(0, limit);
       const last = page.at(-1);
       return {
-        items: page.map(({ task, account, attempt, content }) => {
+        items: page.map(({ task, account, attempt, content, review, approval, configVersion }) => {
           const detail = taskDetail(
             task,
             account,
             attempt,
             content,
             this.options.executorMode !== 'disabled',
+            { review, approval, configVersion },
           );
           return {
             task: detail.task,
@@ -332,6 +395,9 @@ export class TaskService {
           task: tasks,
           attempt: executionAttempts,
           content: taskContents,
+          review: taskReviews.data,
+          approval: taskApprovals.data,
+          configVersion: accounts.currentConfigVersion,
           account: {
             id: accounts.id,
             displayName: accounts.displayName,
@@ -370,14 +436,36 @@ export class TaskService {
             eq(taskContents.taskId, tasks.id),
           ),
         )
+        .leftJoin(
+          taskReviews,
+          and(eq(taskReviews.id, tasks.currentReviewCycleId), eq(taskReviews.taskId, tasks.id)),
+        )
+        .leftJoin(
+          taskApprovals,
+          and(eq(taskApprovals.id, tasks.currentApprovalId), eq(taskApprovals.taskId, tasks.id)),
+        )
         .where(and(eq(tasks.id, taskId), eq(tasks.teamId, actor.teamId)));
       if (!row) throw new AuthError(404, 'NOT_FOUND', '任务不存在或不可访问。');
+      const [decision] = row.review
+        ? await connection
+            .select()
+            .from(taskDecisions)
+            .where(and(eq(taskDecisions.taskId, taskId), eq(taskDecisions.reviewId, row.review.id)))
+            .orderBy(desc(taskDecisions.createdAt), desc(taskDecisions.id))
+            .limit(1)
+        : [];
       return taskDetail(
         row.task,
         row.account,
         row.attempt,
         row.content,
         this.options.executorMode !== 'disabled',
+        {
+          review: row.review,
+          approval: row.approval,
+          configVersion: row.configVersion,
+          decision: decision?.data ?? null,
+        },
       );
     } catch (error) {
       if (error instanceof AuthError) throw error;

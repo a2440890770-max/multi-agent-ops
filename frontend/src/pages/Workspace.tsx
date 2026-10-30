@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Role } from '@multi-agent-ops/shared';
 import { Empty, Notice, PageTitle, PendingButton } from '../components.js';
+import { ConfigSettings } from './ConfigSettings.js';
 
 const memories = [
   {
@@ -305,27 +306,9 @@ export function Settings({ role }: { role: Role }) {
             ) : (
               <>
                 <div className="panel-heading">
-                  <h2>基础配置</h2>
-                  <span className="pill">当前版本 V4</span>
+                  <h2>文案规则</h2>
                 </div>
-                <label>
-                  账号简介
-                  <textarea defaultValue="探索日常灵感，分享有依据的观点。" />
-                </label>
-                <label>
-                  语气偏好
-                  <input defaultValue="自然、克制、有温度" />
-                </label>
-                <label>
-                  禁止事项
-                  <textarea defaultValue="不得做无依据的效果承诺。" />
-                </label>
-                <label>
-                  变更原因
-                  <input placeholder="说明本次规则调整依据" />
-                </label>
-                <PendingButton>保存新配置版本</PendingButton>
-                <Notice>配置冲突拒绝覆盖；规则变更导致资格不再满足时，需要重新审核和批准。</Notice>
+                <ConfigSettings />
               </>
             )}
           </div>

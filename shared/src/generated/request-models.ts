@@ -43,7 +43,7 @@ export interface OperationBodies {
   getContent: undefined;
   compareContent: undefined;
   saveContent: { expectedRevision: number; baseContentVersionId: string | null; body: string };
-  submitReview: { expectedRevision: number; contentVersionId: string };
+  submitReview: { expectedRevision: number; contentVersionId: string; subjectiveNote?: string };
   listReviews: undefined;
   getReview: undefined;
   stopReview: { expectedRevision: number; reason: string };
@@ -56,6 +56,7 @@ export interface OperationBodies {
     unresolvedIssues: string[];
     evidenceIds: string[];
   };
+  listDecisions: undefined;
   approveContent: {
     expectedRevision: number;
     contentVersionId: string;
@@ -203,6 +204,7 @@ export interface OperationQueries {
   getReview: undefined;
   stopReview: undefined;
   decideReview: undefined;
+  listDecisions: { cursor?: string; limit?: number };
   approveContent: undefined;
   publishContent: undefined;
   listPublications: { cursor?: string; limit?: number };
@@ -265,6 +267,7 @@ export interface OperationParams {
   getReview: { taskId: string; reviewId: string };
   stopReview: { taskId: string; reviewId: string };
   decideReview: { taskId: string; reviewId: string };
+  listDecisions: { taskId: string; reviewId: string };
   approveContent: { taskId: string };
   publishContent: { taskId: string };
   listPublications: { taskId: string };
@@ -320,6 +323,7 @@ export interface OperationResponses {
   getReview: ResponseModels['Review'];
   stopReview: ResponseModels['TaskDetail'];
   decideReview: ResponseModels['Decision'];
+  listDecisions: ResponseModels['Decisions'];
   approveContent: ResponseModels['ApprovalResult'];
   publishContent: ResponseModels['Publication'];
   listPublications: ResponseModels['Publications'];

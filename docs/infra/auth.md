@@ -18,7 +18,9 @@ Session 响应使用现有 `{ data: { member, permissions, csrfToken, expiresAt 
 - `AUTH_TRUSTED_ORIGINS`：逗号分隔的精确 Origin。开发默认接受 localhost 和 127.0.0.1 的 5173/3001 端口；其他来源须显式指定。禁止通配符、路径和内嵌凭据。
 - 生产必须设置 `NODE_ENV=production`、随机 `AUTH_SECRET` 和 HTTPS `AUTH_TRUSTED_ORIGINS`，使用同源 HTTPS。生产 Cookie 为 `HttpOnly; Secure; SameSite=Lax; Path=/`；开发仅允许本机 HTTP。
 
-未配置认证密钥时，健康接口仍可启动；登录返回 503，不创建模拟会话。部署密钥请通过秘密配置注入。可在本机生成并安全保存：
+未配置认证密钥时，健康接口仍可启动；登录返回 503，不创建模拟会话。数据库中已有启用的管理员也不能替代认证密钥。若本地登录页提示“登录服务暂不可用”，先在项目根目录运行 `npm run env:setup`，它会补齐缺失或空的本地 `AUTH_SECRET`，不会覆盖已有密钥或数据库配置；然后重启 `npm run dev`，重新登录。
+
+部署密钥请通过秘密配置注入；生产环境不会自动生成密钥。也可在本机生成并安全保存：
 
 ```sh
 node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"

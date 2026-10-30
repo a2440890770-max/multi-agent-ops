@@ -3,6 +3,7 @@ import type { OperationBodies, TaskDetail } from '@multi-agent-ops/shared';
 import { useAuth } from '../auth.js';
 import { Notice } from '../components.js';
 import { runTaskCommand, TaskRequestError } from '../task-api.js';
+import type { TaskExecutionState } from './TaskExecution.js';
 
 type Draft = {
   answers: Record<string, string>;
@@ -54,9 +55,11 @@ function readDraft(key: string): Draft {
 export function TaskClarifications({
   detail,
   onChanged,
+  execution,
 }: {
   detail: TaskDetail;
   onChanged: () => void;
+  execution: TaskExecutionState;
 }) {
   const auth = useAuth();
   const storageKey = `ops-clarification:${JSON.stringify([auth.session?.member.teamId, auth.session?.member.id, detail.task.id, detail.task.currentAttemptId])}`;
@@ -207,7 +210,34 @@ export function TaskClarifications({
             )}
           </div>
         ))}
-        {!detail.task.clarifications.length && <p className="muted">暂无澄清问题。</p>}
+        {!detail.task.clarifications.length && (
+          <div>
+            <p className="muted">
+              {execution.active
+                ? detail.currentAttempt?.simulationScenario === 'clarification'
+                  ? '正在生成澄清问题，完成后会自动显示答复输入框。'
+                  : '本次执行未选择“需要澄清”。执行结束后，可点击下方按钮生成澄清问题。'
+                : '当前没有澄清问题。点击下方按钮启动“需要澄清”的模拟执行，生成问题后即可填写答复。'}
+            </p>
+            {detail.currentAttempt && !execution.active && (
+              <p className="muted">将创建新的执行尝试，已有执行记录会保留。</p>
+            )}
+            <button
+              type="button"
+              className="primary"
+              disabled={
+                execution.busy || !!execution.pending || !execution.generationAction.allowed
+              }
+              title={execution.generationAction.reason ?? undefined}
+              onClick={execution.generateClarification}
+            >
+              生成澄清问题
+            </button>
+            {!execution.generationAction.allowed && !execution.active && (
+              <p className="muted">{execution.generationAction.reason}</p>
+            )}
+          </div>
+        )}
         {canAnswer && (
           <button className="primary" type="submit" disabled={locked}>
             提交澄清答复

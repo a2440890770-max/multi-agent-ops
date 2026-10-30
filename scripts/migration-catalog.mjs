@@ -48,7 +48,7 @@ export async function inspectBusinessSchema(client) {
     const constraints = await client.query(
       `SELECT conname AS name, contype AS type, pg_get_constraintdef(oid) AS definition,
          condeferrable AS deferrable, condeferred AS deferred, convalidated AS validated
-       FROM pg_constraint WHERE conrelid=to_regclass($1) ORDER BY conname`,
+       FROM pg_constraint WHERE conrelid=to_regclass($1) AND contype <> 'n' ORDER BY conname`,
       [`public.${name}`],
     );
     const indexes = await client.query(

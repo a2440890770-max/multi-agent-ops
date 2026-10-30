@@ -236,7 +236,9 @@ test('数据库真实执行唯一性、外键、检查约束、默认过期时�
     c.query('UPDATE accounts SET current_config_version=2 WHERE id=$1', [account]),
     { code: '23503' },
   );
-  await assert.rejects(c.query('DELETE FROM teams WHERE id=$1', [team]), { code: '23503' });
+  await assert.rejects(c.query('DELETE FROM teams WHERE id=$1', [team]), (error) =>
+    ['23503', '23001'].includes(error.code),
+  );
   await assert.rejects(c.query('UPDATE config_versions SET max_auto_revisions=4'), {
     code: '23514',
   });
@@ -493,7 +495,7 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
   await runAllMigrations(c, 'migrate');
   const { account } = await seed(c);
   const before = (await c.query('SELECT * FROM tasks')).rows;
-  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 3, pending: 0 });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 4, pending: 0 });
   assert.deepEqual(
     (await c.query('SELECT * FROM tasks')).rows,
     before.map((row) => ({
@@ -504,6 +506,9 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
       revision: 1,
       current_attempt_id: null,
       current_content_version_id: null,
+      current_review_cycle_id: null,
+      current_approval_id: null,
+      approval_status: 'not_requested',
       work_generation: 0,
     })),
   );
@@ -532,4 +537,78 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
   const fingerprint = await dataFingerprint(c);
   assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 0, pending: 0 });
   assert.deepEqual(await dataFingerprint(c), fingerprint);
+});
+
+test('已知人工版本分支与当前任务迁移兼容，保留原历史、内容和密码散列；重复升级不变更数据', async (t) => {
+  const { editorialMigration } = await import('./compatible-migrations.mjs');
+  const c = await database(t);
+  await runMigrations(c, 'migrate');
+  const seeded = await seed(c);
+  const ddl = [
+    'CREATE TABLE content_approvals (id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE content_versions (id uuid NOT NULL,task_id uuid NOT NULL,version_no integer NOT NULL,parent_version_id uuid,data jsonb NOT NULL)',
+    'CREATE TABLE editorial_attempts (id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE editorial_tasks (id uuid NOT NULL,team_id uuid NOT NULL,account_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE manual_decisions (id uuid NOT NULL,task_id uuid NOT NULL,review_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE publication_operations (id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE review_cycles (id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    "CREATE FUNCTION keep_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'immutable'; END; $$",
+  ];
+  for (const sql of ddl) await c.query(sql);
+  for (const [table, trigger] of [
+    ['content_versions', 'content_versions_immutable'],
+    ['review_cycles', 'review_cycles_immutable'],
+    ['manual_decisions', 'manual_decisions_immutable'],
+    ['editorial_attempts', 'editorial_attempts_immutable'],
+    ['config_versions', 'config_versions_immutable'],
+    ['content_approvals', 'content_approvals_binding'],
+  ])
+    await c.query(
+      `CREATE TRIGGER ${trigger} BEFORE UPDATE OR DELETE ON ${table} FOR EACH ROW EXECUTE FUNCTION keep_history()`,
+    );
+  await c.query(
+    'INSERT INTO editorial_tasks VALUES(gen_random_uuid(),$1,$2,\'{"body":"原有文案"}\'::jsonb)',
+    [seeded.team, seeded.account],
+  );
+  await c.query('INSERT INTO drizzle.__drizzle_migrations(hash,created_at) VALUES($1,$2)', [
+    editorialMigration.hash,
+    editorialMigration.createdAt,
+  ]);
+  const originalHistory = (
+    await c.query('SELECT hash,created_at FROM drizzle.__drizzle_migrations ORDER BY id')
+  ).rows;
+  assert.deepEqual(await runLatestMigrations(c, 'status'), {
+    applied: 1,
+    pending: 5,
+    retainedCompatible: 1,
+  });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 5, pending: 0 });
+  for (const entry of originalHistory)
+    assert.equal(
+      (
+        await c.query(
+          'SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations WHERE hash=$1 AND created_at=$2',
+          [entry.hash, entry.created_at],
+        )
+      ).rows[0].n,
+      1,
+    );
+  assert.equal(
+    (await c.query('SELECT password_hash FROM members WHERE id=$1', [seeded.member])).rows[0]
+      .password_hash,
+    'synthetic-hash',
+  );
+  assert.equal(
+    (await c.query("SELECT data->>'body' AS body FROM editorial_tasks")).rows[0].body,
+    '原有文案',
+  );
+  const before = await dataFingerprint(c);
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 0, pending: 0 });
+  assert.deepEqual(await dataFingerprint(c), before);
+  // A matching timestamp alone never permits an unknown/edited migration hash.
+  await c.query('UPDATE drizzle.__drizzle_migrations SET hash=$1 WHERE hash=$2', [
+    'bad-history',
+    editorialMigration.hash,
+  ]);
+  await assert.rejects(runLatestMigrations(c, 'migrate'), /迁移历史与本地 SQL 不一致/);
 });

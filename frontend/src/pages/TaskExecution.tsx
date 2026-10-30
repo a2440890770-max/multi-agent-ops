@@ -8,6 +8,7 @@ import { executionLabels } from '../task-labels.js';
 
 type Scenario = 'success' | 'failure' | 'clarification';
 type Pending = { key: string; command: ExecutionCommand };
+type ScenarioSelection = { attemptId: string | null; scenario: Scenario };
 const roles = {
   supervisor: '检查原始要求',
   research: '模拟研究资料',
@@ -60,24 +61,52 @@ function readPending(key: string): Pending | null {
   }
 }
 
-export function TaskExecutionControls({
-  detail,
-  onChanged,
-}: {
-  detail: TaskDetail;
-  onChanged: () => void;
-}) {
+function readScenario(key: string): ScenarioSelection | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw || raw.length > 500) return null;
+    const value = JSON.parse(raw) as ScenarioSelection;
+    return value &&
+      (value.attemptId === null || typeof value.attemptId === 'string') &&
+      Object.hasOwn(scenarios, value.scenario)
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function useTaskExecution(detail: TaskDetail, onChanged: () => void) {
   const auth = useAuth();
   const storageKey = `ops-execution:${JSON.stringify([auth.session?.member.teamId, auth.session?.member.id, detail.task.id])}`;
+  const scenarioKey = `${storageKey}:scenario`;
   const [pending, setPending] = useState<Pending | null>(() => readPending(storageKey));
-  const [scenario, setScenario] = useState<Scenario>('success');
+  const [selection, setSelection] = useState(() => readScenario(scenarioKey));
   const [busy, setBusy] = useState(false);
   const working = useRef(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const active =
+  const active = !!(
     detail.currentAttempt &&
-    ['queued', 'running', 'awaiting_clarification'].includes(detail.currentAttempt.status);
+    ['queued', 'running', 'awaiting_clarification'].includes(detail.currentAttempt.status)
+  );
+  const scenario =
+    (active ? detail.currentAttempt?.simulationScenario : null) ??
+    (pending?.command.kind === 'start' || pending?.command.kind === 'retry'
+      ? pending.command.body.simulationScenario
+      : null) ??
+    (selection?.attemptId === detail.task.currentAttemptId ? selection.scenario : null) ??
+    detail.currentAttempt?.simulationScenario ??
+    'success';
+  function setScenario(value: Scenario) {
+    const selected = { attemptId: detail.task.currentAttemptId, scenario: value };
+    setSelection(selected);
+    try {
+      sessionStorage.setItem(scenarioKey, JSON.stringify(selected));
+    } catch {
+      /* Scenario selection is optional; the command always sends it explicitly. */
+    }
+  }
 
   async function submit(action: Pending) {
     if (working.current || !auth.session) return;
@@ -143,11 +172,11 @@ export function TaskExecutionControls({
       setBusy(false);
     }
   }
-  function command(kind: 'start' | 'retry' | 'stop') {
+  function command(kind: 'start' | 'retry' | 'stop', requestedScenario = scenario) {
     const body = { expectedRevision: detail.task.revision };
     const action: ExecutionCommand =
       kind === 'start'
-        ? { kind, body: { ...body, simulationScenario: scenario } }
+        ? { kind, body: { ...body, simulationScenario: requestedScenario } }
         : kind === 'retry'
           ? {
               kind,
@@ -156,7 +185,7 @@ export function TaskExecutionControls({
                 previousAttemptId: detail.task.currentAttemptId,
                 restartTerminated: false,
                 reason: '手动重新执行模拟任务',
-                simulationScenario: scenario,
+                simulationScenario: requestedScenario,
               },
             }
           : {
@@ -166,6 +195,38 @@ export function TaskExecutionControls({
             };
     void submit({ key: crypto.randomUUID(), command: action });
   }
+  const generationAction = detail.currentAttempt ? detail.actions.retry : detail.actions.start;
+  function generateClarification() {
+    if (busy || pending || !generationAction.allowed) return;
+    setScenario('clarification');
+    command(detail.currentAttempt ? 'retry' : 'start', 'clarification');
+  }
+  return {
+    pending,
+    scenario,
+    setScenario,
+    busy,
+    error,
+    notice,
+    active,
+    submit,
+    command,
+    generationAction,
+    generateClarification,
+  };
+}
+
+export type TaskExecutionState = ReturnType<typeof useTaskExecution>;
+
+export function TaskExecutionControls({
+  detail,
+  execution,
+}: {
+  detail: TaskDetail;
+  execution: TaskExecutionState;
+}) {
+  const { pending, scenario, setScenario, busy, error, notice, active, submit, command } =
+    execution;
   return (
     <section className="panel detail-panel" aria-labelledby="execution-controls-title">
       <h2 id="execution-controls-title">模拟执行</h2>
