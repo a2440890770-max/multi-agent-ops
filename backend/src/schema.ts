@@ -1,5 +1,12 @@
 import { sql } from 'drizzle-orm';
-import type { Clarification, Failure, SourceRef } from '@multi-agent-ops/shared';
+import type {
+  Approval,
+  Clarification,
+  Failure,
+  ManualDecision,
+  ReviewCycle,
+  SourceRef,
+} from '@multi-agent-ops/shared';
 import {
   type PgTableExtraConfigValue,
   boolean,
@@ -302,9 +309,29 @@ export const tasks = pgTable(
     revision: integer('revision').notNull().default(1),
     currentAttemptId: uuid('current_attempt_id'),
     currentContentVersionId: uuid('current_content_version_id'),
+    currentReviewCycleId: uuid('current_review_cycle_id'),
+    currentApprovalId: uuid('current_approval_id'),
+    approvalStatus: text('approval_status')
+      .$type<'not_requested' | 'pending' | 'approved' | 'invalidated'>()
+      .notNull()
+      .default('not_requested'),
     workGeneration: integer('work_generation').notNull().default(0),
   },
   (t): PgTableExtraConfigValue[] => [
+    check(
+      'tasks_approval_status_check',
+      sql`${t.approvalStatus} IN ('not_requested','pending','approved','invalidated')`,
+    ),
+    foreignKey({
+      name: 'tasks_current_review_fk',
+      columns: [t.id, t.currentReviewCycleId],
+      foreignColumns: [taskReviews.taskId, taskReviews.id],
+    }),
+    foreignKey({
+      name: 'tasks_current_approval_fk',
+      columns: [t.id, t.currentApprovalId],
+      foreignColumns: [taskApprovals.taskId, taskApprovals.id],
+    }),
     foreignKey({
       name: 'tasks_current_attempt_fk',
       columns: [t.id, t.currentAttemptId],
@@ -511,7 +538,9 @@ export const taskContents = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     taskId: uuid('task_id').notNull(),
-    originAttemptId: uuid('origin_attempt_id').notNull(),
+    originAttemptId: uuid('origin_attempt_id'),
+    parentVersionId: uuid('parent_version_id'),
+    sourceKind: text('source_kind').$type<'agent' | 'manual'>().notNull().default('agent'),
     versionNo: integer('version_no').notNull(),
     body: text('body').notNull(),
     contentHash: text('content_hash').notNull(),
@@ -522,6 +551,15 @@ export const taskContents = pgTable(
     unique('task_contents_task_id_id_key').on(t.taskId, t.id),
     unique('task_contents_task_version_key').on(t.taskId, t.versionNo),
     unique('task_contents_attempt_key').on(t.originAttemptId),
+    check(
+      'task_contents_source_check',
+      sql`${t.sourceKind} IN ('agent','manual') AND (${t.sourceKind} <> 'agent' OR ${t.originAttemptId} IS NOT NULL)`,
+    ),
+    foreignKey({
+      name: 'task_contents_parent_fk',
+      columns: [t.taskId, t.parentVersionId],
+      foreignColumns: [t.taskId, t.id],
+    }).onDelete('restrict'),
     foreignKey({
       name: 'task_contents_task_fk',
       columns: [t.taskId],
@@ -539,5 +577,89 @@ export const taskContents = pgTable(
     }).onDelete('restrict'),
     check('task_contents_version_check', sql`${t.versionNo} >= 1`),
     check('task_contents_hash_check', sql`${t.contentHash} ~ '^[a-f0-9]{64}$'`),
+    check(
+      'task_contents_body_hash_check',
+      sql`${t.contentHash} = encode(sha256(convert_to(${t.body}, 'UTF8')), 'hex')`,
+    ),
+  ],
+);
+
+export const taskReviews = pgTable(
+  'task_review_cycles',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id').notNull(),
+    contentVersionId: uuid('content_version_id').notNull(),
+    configVersion: integer('config_version').notNull(),
+    data: jsonb('data').$type<ReviewCycle>().notNull(),
+  },
+  (t) => [
+    unique('task_reviews_task_id_key').on(t.taskId, t.id),
+    foreignKey({
+      name: 'task_reviews_content_fk',
+      columns: [t.taskId, t.contentVersionId],
+      foreignColumns: [taskContents.taskId, taskContents.id],
+    }).onDelete('restrict'),
+    check(
+      'task_reviews_binding_check',
+      sql`${t.data}->>'id' = ${t.id}::text AND ${t.data}->>'taskId' = ${t.taskId}::text AND ${t.data}->>'currentVersionId' = ${t.contentVersionId}::text AND (${t.data}->>'configVersion')::integer = ${t.configVersion}`,
+    ),
+  ],
+);
+
+export const taskDecisions = pgTable(
+  'task_review_decisions',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id').notNull(),
+    reviewId: uuid('review_id').notNull(),
+    data: jsonb('data').$type<ManualDecision>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'task_decisions_review_fk',
+      columns: [t.taskId, t.reviewId],
+      foreignColumns: [taskReviews.taskId, taskReviews.id],
+    }).onDelete('restrict'),
+    check(
+      'task_decisions_binding_check',
+      sql`${t.data}->>'id' = ${t.id}::text AND length(btrim(${t.data}->>'reason')) > 0`,
+    ),
+  ],
+);
+
+export const taskApprovals = pgTable(
+  'task_version_approvals',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id').notNull(),
+    contentVersionId: uuid('content_version_id').notNull(),
+    reviewCycleId: uuid('review_cycle_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    configVersion: integer('config_version').notNull(),
+    data: jsonb('data').$type<Approval>().notNull(),
+  },
+  (t) => [
+    unique('task_approvals_task_id_key').on(t.taskId, t.id),
+    foreignKey({
+      name: 'task_approvals_content_fk',
+      columns: [t.taskId, t.contentVersionId],
+      foreignColumns: [taskContents.taskId, taskContents.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'task_approvals_review_fk',
+      columns: [t.taskId, t.reviewCycleId],
+      foreignColumns: [taskReviews.taskId, taskReviews.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'task_approvals_config_fk',
+      columns: [t.accountId, t.configVersion],
+      foreignColumns: [configVersions.accountId, configVersions.version],
+    }).onDelete('restrict'),
+    check(
+      'task_approvals_binding_check',
+      sql`${t.data}->>'id' = ${t.id}::text AND ${t.data}->>'taskId' = ${t.taskId}::text AND ${t.data}->>'contentVersionId' = ${t.contentVersionId}::text AND ${t.data}->>'reviewCycleId' = ${t.reviewCycleId}::text AND ${t.data}->>'accountId' = ${t.accountId}::text AND ${t.data}->>'status' IN ('approved','invalidated')`,
+    ),
   ],
 );

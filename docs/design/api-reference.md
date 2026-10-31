@@ -30,6 +30,7 @@
 | getReview             | GET /api/v1/tasks/:taskId/reviews/:reviewId                        | [审核结果、阻断与评分来源](#getreview)              |
 | stopReview            | POST /api/v1/tasks/:taskId/reviews/:reviewId/stop                  | [取消人工审核](#stopreview)                         |
 | decideReview          | POST /api/v1/tasks/:taskId/reviews/:reviewId/decisions             | [人工裁决主观分歧](#decidereview)                   |
+| listDecisions         | GET /api/v1/tasks/:taskId/reviews/:reviewId/decisions              | [读取人工裁决历史](#listdecisions)                  |
 | approveContent        | POST /api/v1/tasks/:taskId/approvals                               | [批准指定版本，等待用户点击发布](#approvecontent)   |
 | publishContent        | POST /api/v1/tasks/:taskId/publications                            | [点击发布或创建人工交接](#publishcontent)           |
 | listPublications      | GET /api/v1/tasks/:taskId/publications                             | [发布操作历史](#listpublications)                   |
@@ -823,7 +824,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前人工版；原子取得 manual_review 工作槽，冻结版本；只审核不重写，不重置三轮计数；当前已完成通过周期返回已有结果。
+前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前人工版；同步检查字符数、纯文案与当前禁止词，可附加 subjectiveNote 记录人工主观意见；冻结版本与配置，只审核不重写、不调用 Agent；同键同请求重放原结果。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -835,6 +836,7 @@ JSON 请求体（未列字段拒绝）：
 | ---------------- | ---- | ------- | --------------------------------------- |
 | expectedRevision | 是   | integer | 最小 1；最大 9007199254740991           |
 | contentVersionId | 是   | string  | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
+| subjectiveNote   | 否   | string  | 最短 0；最长 2000                       |
 
 成功：HTTP 202，`{ data: Review, meta: { requestId, replayed } }`。data 字段：
 
@@ -1007,6 +1009,36 @@ JSON 请求体（未列字段拒绝）：
 
 转换：A02、A07。审计：review.decided。验收：AC-04（关联设计，不表示已验收）。
 
+## listDecisions
+
+`GET /api/v1/tasks/:taskId/reviews/:reviewId/decisions` — 读取人工裁决历史。
+
+权限：admin / operator。
+
+前置条件与业务校验：同团队同任务，保留所有不可变裁决及理由。
+
+路径字段：`taskId`、`reviewId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+查询参数（未列字段拒绝）：
+
+| 字段   | 必填 | 类型    | 校验             |
+| ------ | ---- | ------- | ---------------- |
+| cursor | 否   | string  | 最短 1；最长 512 |
+| limit  | 否   | integer | 最小 1；最大 100 |
+
+成功：HTTP 200，`{ data: Decisions, meta: { requestId, replayed } }`。data 字段：
+
+| 字段       | 类型             | 含义                            |
+| ---------- | ---------------- | ------------------------------- |
+| items      | ManualDecision[] | 当前分页结果                    |
+| nextCursor | null / string    | 下一页不透明游标，null 表示结束 |
+
+重复与并发：只读，可重试；分页使用不透明游标。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：访问日志。验收：AC-04（关联设计，不表示已验收）。
+
 ## approveContent
 
 `POST /api/v1/tasks/:taskId/approvals` — 批准指定版本，等待用户点击发布。
@@ -1048,7 +1080,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前版本、摘要、账号、审核、批准均匹配，账号授权有效，无历史成功发布。官方渠道须 officialPublishAvailable；manual 冻结批准文案并占锁；唯一键(taskId,contentVersionId,accountId)。
+前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前版本、摘要、账号、审核、批准均匹配，账号授权有效，无历史成功发布。当前仅接入旧批准和版本不匹配的拒绝校验；有效请求仍返回 501，不创建发送记录或对外发布。后续官方渠道须 officialPublishAvailable。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 

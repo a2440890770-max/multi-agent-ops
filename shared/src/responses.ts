@@ -43,6 +43,7 @@ export interface ResponseModels {
   Review: ReviewCycle;
   Reviews: Page<ReviewCycle>;
   Decision: { decision: ManualDecision; task: TaskDetail };
+  Decisions: Page<ManualDecision>;
   ApprovalResult: { approval: Approval; task: TaskDetail };
   Publication: { operation: PublishOperation; task: TaskDetail };
   Publications: Page<PublishOperation>;

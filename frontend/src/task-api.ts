@@ -115,11 +115,12 @@ function validDetail(value: unknown): value is TaskDetail {
   );
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: {
     body?: unknown;
-    successStatus?: number;
+    successStatus?: number | number[];
+    method?: 'POST' | 'PUT';
     key?: string;
     csrf?: string;
     signal?: AbortSignal;
@@ -131,7 +132,7 @@ async function request<T>(
   let response: Response;
   try {
     response = await fetch(path, {
-      method: writing ? 'POST' : 'GET',
+      method: writing ? (options.method ?? 'POST') : 'GET',
       credentials: 'same-origin',
       cache: 'no-store',
       signal: options.signal
@@ -198,7 +199,11 @@ async function request<T>(
     );
   }
   if (
-    response.status !== (options.successStatus ?? (creating ? 201 : 200)) ||
+    !(
+      Array.isArray(options.successStatus)
+        ? options.successStatus
+        : [options.successStatus ?? (creating ? 201 : 200)]
+    ).includes(response.status) ||
     !object(body) ||
     !validate(body.data) ||
     !object(body.meta) ||

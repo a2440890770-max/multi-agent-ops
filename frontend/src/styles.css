@@ -1323,3 +1323,37 @@ details p {
 .clarification-question label {
   margin-top: 12px;
 }
+
+.editorial-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 20px 0;
+}
+.editorial-comparison > p,
+.editorial-comparison > button {
+  grid-column: 1 / -1;
+}
+.editorial-id {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.editorial-diff {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.editorial-diff ins {
+  background: #e1efdf;
+}
+.editorial-diff del {
+  background: #fbe4df;
+}
+.detail-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+@media (max-width: 700px) {
+  .editorial-comparison {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -43,7 +43,7 @@ cd multi-agent-ops
    npm run db:migrate
    ```
 
-   `env:setup` 自动创建 `.env` 和随机本地数据库密码，启动数据库并等待健康检查；重复执行不覆盖已有 `.env`。`db:migrate` 创建所需业务表，不插入账号或示例数据，不调用真实模型。若数据库已手动建表，先按[迁移说明](backend/drizzle/README.md)备份并执行 `db:baseline`。
+   `env:setup` 自动创建 `.env`、随机本地数据库密码和认证密钥 `AUTH_SECRET`，启动数据库并等待健康检查；重复执行保留已有配置和密钥，仅补齐缺失或空的本地认证密钥。`db:migrate` 创建所需业务表，不插入账号或示例数据，不调用真实模型。若数据库已手动建表，先按[迁移说明](backend/drizzle/README.md)备份并执行 `db:baseline`。
 
 3. 启动三部分：
 

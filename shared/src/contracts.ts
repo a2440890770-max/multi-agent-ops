@@ -130,7 +130,7 @@ const verification = input(
   ],
 );
 
-/** D3 authentication and business authorization are implemented; business handlers are stubs. */
+/** Live manual editorial and mock execution routes coexist with explicitly marked contract-only routes. */
 export const endpoints: readonly Endpoint[] = [
   endpoint({
     operationId: 'login',
@@ -466,9 +466,9 @@ export const endpoints: readonly Endpoint[] = [
     method: 'POST',
     path: '/tasks/:taskId/reviews',
     summary: '手动提交当前版本审核',
-    body: input(version),
+    body: input({ ...version, subjectiveNote: text(2000, 0) }, Object.keys(version)),
     response: 'Review',
-    conditions: `${taskRules}当前人工版；原子取得 manual_review 工作槽，冻结版本；只审核不重写，不重置三轮计数；当前已完成通过周期返回已有结果。`,
+    conditions: `${taskRules}当前人工版；同步检查字符数、纯文案与当前禁止词，可附加 subjectiveNote 记录人工主观意见；冻结版本与配置，只审核不重写、不调用 Agent；同键同请求重放原结果。`,
     transitions: ['C04', 'C10'],
     audit: 'review.submitted',
     ac: ['AC-03', 'AC-04', 'AC-05'],
@@ -530,6 +530,18 @@ export const endpoints: readonly Endpoint[] = [
     ac: ['AC-04'],
   }),
   endpoint({
+    operationId: 'listDecisions',
+    method: 'GET',
+    path: '/tasks/:taskId/reviews/:reviewId/decisions',
+    summary: '读取人工裁决历史',
+    query: read,
+    response: 'Decisions',
+    conditions: '同团队同任务，保留所有不可变裁决及理由。',
+    transitions: [],
+    audit: '访问日志',
+    ac: ['AC-04'],
+  }),
+  endpoint({
     operationId: 'approveContent',
     method: 'POST',
     path: '/tasks/:taskId/approvals',
@@ -554,7 +566,7 @@ export const endpoints: readonly Endpoint[] = [
     summary: '点击发布或创建人工交接',
     body: input(publish),
     response: 'Publication',
-    conditions: `${publishRules}官方渠道须 officialPublishAvailable；manual 冻结批准文案并占锁；唯一键(taskId,contentVersionId,accountId)。`,
+    conditions: `${publishRules}当前仅接入旧批准和版本不匹配的拒绝校验；有效请求仍返回 501，不创建发送记录或对外发布。后续官方渠道须 officialPublishAvailable。`,
     transitions: ['P01', 'P02', 'P13'],
     audit: 'publication.requested / publication.handed_off',
     ac: ['AC-01', 'AC-06', 'AC-08', 'AC-14'],
@@ -952,7 +964,22 @@ export function getOpenApiDocument() {
           ? 'D4 创建任务成功响应；任务、幂等记录及审计同事务保存，不自动执行。'
           : e.operationId === 'getTask'
             ? 'D4 详情查询成功响应；同团队只读查询当前持久化状态，replayed=false。'
-            : '业务实现后的成功响应；当前先校验会话、角色及写入 Origin/CSRF，通过后返回 501 占位。',
+            : [
+                  'listContent',
+                  'getContent',
+                  'compareContent',
+                  'saveContent',
+                  'submitReview',
+                  'listReviews',
+                  'getReview',
+                  'decideReview',
+                  'listDecisions',
+                  'approveContent',
+                  'getConfig',
+                  'updateConfig',
+                ].includes(e.operationId)
+              ? '人工编辑审核真实持久化响应；无需 Agent，写入比较资源版本并支持幂等重放。'
+              : '业务实现后的成功响应；当前校验授权后返回 501 占位；发布另有失效批准拒绝校验。',
       content: {
         'application/json': {
           schema: {
@@ -1004,6 +1031,18 @@ export function getOpenApiDocument() {
         'stopAttempt',
         'taskHistory',
         'clarifyTask',
+        'listContent',
+        'getContent',
+        'compareContent',
+        'saveContent',
+        'submitReview',
+        'listReviews',
+        'getReview',
+        'decideReview',
+        'listDecisions',
+        'approveContent',
+        'getConfig',
+        'updateConfig',
       ].includes(e.operationId)
         ? 'implemented'
         : 'contract-only',
@@ -1016,7 +1055,7 @@ export function getOpenApiDocument() {
       title: 'Multi-Agent Ops D1 接口契约',
       version: '0.1.0',
       description:
-        '已实现服务端 Session 登录、当前身份、退出、业务权限校验及 D4 创建草稿任务、同团队任务列表、筛选和详情查询；创建任务不自动执行；已实现模拟执行的启动、停止、从头重试、历史记录和持久化状态流；其他业务处理仍为 501 占位，已支持澄清答复与同尝试恢复；真实 Agent、自动语义检查及真实发布尚未实现。',
+        '已实现 Session 登录、业务权限、任务创建与查询、模拟执行和澄清恢复，以及无需 Agent 的不可变文案版本、人工编辑、基础审核、主观裁决、允许自批的版本批准和账号配置。编辑、新执行、配置变更使旧批准失效。实际对外发布与真实 Agent 执行尚未接通；其他未实现业务明确返回 501。',
     },
     paths,
     components: {

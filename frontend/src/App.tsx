@@ -196,7 +196,13 @@ export function App() {
         </header>
         {path !== '/' && path !== '/login' && !liveTaskPage && auth.status === 'authenticated' && (
           <div className="preview-banner">
-            <span>业务预览</span>登录身份已验证；业务内容使用示例数据，操作不会保存或实际发布。
+            {path === '/settings' ? (
+              <>基础配置已接入真实保存；成员管理与官方授权入口仍为预览。</>
+            ) : (
+              <>
+                <span>业务预览</span>登录身份已验证；业务内容使用示例数据，操作不会保存或实际发布。
+              </>
+            )}
           </div>
         )}
         {path !== '/login' && auth.message && <Notice tone="warning">{auth.message}</Notice>}

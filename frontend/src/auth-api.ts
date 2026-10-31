@@ -47,7 +47,11 @@ export async function authRequest<T>(
           : response.status === 403
             ? '请求安全校验未通过，请重新检查登录状态后再试。'
             : response.status >= 500
-              ? '登录服务暂不可用，请稍后重新检查登录状态。'
+              ? 'error' in body &&
+                body.error.code === 'DEPENDENCY_UNAVAILABLE' &&
+                body.error.message === '登录服务所需的数据库结构尚未升级，请联系管理员完成迁移。'
+                ? body.error.message
+                : '登录服务暂不可用，请稍后重新检查登录状态。'
               : 'error' in body
                 ? body.error.message
                 : '请求未完成，请稍后再试。';

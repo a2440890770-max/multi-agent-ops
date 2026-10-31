@@ -8,6 +8,7 @@ import type {
   TaskDetail,
 } from '@multi-agent-ops/shared';
 import { AuthError } from './auth.js';
+import { invalidateApproval, lockEditorialTeam } from './editorial-state.js';
 import type { createBusinessDatabase } from './database.js';
 import { activeAttempt, attemptModel, mockStages, stepModel } from './execution-model.js';
 import {
@@ -124,6 +125,7 @@ export class TaskExecutionService {
           .readBigInt64BE()
           .toString();
         await tx.execute(sql`SELECT pg_advisory_xact_lock(${lock}::bigint)`);
+        await lockEditorialTeam(tx, actor.teamId);
         const [member] = await tx
           .select()
           .from(members)
@@ -337,6 +339,7 @@ export class TaskExecutionService {
               '当前版本最多保留 100 次完整执行，请创建新任务。',
             );
           const scenario = body.simulationScenario ?? 'success';
+          await invalidateApproval(tx, task, now, '已启动新的执行，旧批准失效。');
           const delay = this.options.stepDelayMs ?? 1000;
           const [attempt] = await tx
             .insert(executionAttempts)
@@ -375,6 +378,8 @@ export class TaskExecutionService {
             .set({
               currentAttemptId: attempt.id,
               currentContentVersionId: null,
+              currentReviewCycleId: null,
+              approvalStatus: task.currentApprovalId ? 'invalidated' : 'not_requested',
               executionStatus: 'queued',
               currentStep: '等待模拟执行',
               errorMessage: null,

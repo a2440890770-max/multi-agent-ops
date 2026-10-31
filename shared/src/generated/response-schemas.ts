@@ -1019,6 +1019,15 @@ export const responseSchemas = {
     },
     required: ['decision', 'task'],
   },
+  Decisions: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      items: { type: 'array', items: { $ref: '#/components/schemas/ManualDecision' } },
+      nextCursor: { anyOf: [{ type: 'null' }, { type: 'string' }] },
+    },
+    required: ['items', 'nextCursor'],
+  },
   Approval: {
     type: 'object',
     additionalProperties: false,

@@ -3,6 +3,7 @@ import { endpoints } from '@multi-agent-ops/shared';
 import type { ApiError, OperationBodies } from '@multi-agent-ops/shared';
 import { AuthError, cookieToken } from './auth.js';
 import type { AuthService } from './auth.js';
+import { databaseErrorCode } from './database-errors.js';
 
 export const authOperations = new Set(['login', 'getMe', 'logout']);
 
@@ -34,16 +35,30 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService | und
         reply.header('pragma', 'no-cache');
       },
       errorHandler(error, request, reply) {
+        const databaseCode = databaseErrorCode(error);
         const failure =
           error instanceof AuthError
             ? error
-            : error.validation
-              ? new AuthError(400, 'VALIDATION_ERROR', '请求字段不符合认证接口契约。')
-              : error.statusCode && error.statusCode < 500
-                ? new AuthError(400, 'VALIDATION_ERROR', '请求格式无效。')
-                : new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '认证服务暂不可用，请稍后再试。');
+            : databaseCode && ['42P01', '42703'].includes(databaseCode)
+              ? new AuthError(
+                  503,
+                  'DEPENDENCY_UNAVAILABLE',
+                  '登录服务所需的数据库结构尚未升级，请联系管理员完成迁移。',
+                )
+              : error.validation
+                ? new AuthError(400, 'VALIDATION_ERROR', '请求字段不符合认证接口契约。')
+                : error.statusCode && error.statusCode < 500
+                  ? new AuthError(400, 'VALIDATION_ERROR', '请求格式无效。')
+                  : new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '认证服务暂不可用，请稍后再试。');
         if (failure.status >= 500)
-          app.log.warn({ requestId: request.id, code: failure.code }, '认证请求未完成');
+          app.log.warn(
+            {
+              requestId: request.id,
+              code: failure.code,
+              ...(databaseCode ? { databaseCode } : {}),
+            },
+            '认证请求未完成',
+          );
         if (failure.retryAfter) reply.header('retry-after', failure.retryAfter);
         const body: ApiError = {
           error: {
