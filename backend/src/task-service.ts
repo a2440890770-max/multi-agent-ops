@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq, or, sql } from 'drizzle-orm';
 import type {
   Account,
+  OperationParams,
+  ResponseModels,
   OperationBodies,
   OperationQueries,
   Page,
@@ -11,11 +13,14 @@ import type {
   ReviewCycle,
   Approval,
   ManualDecision,
+  PublishOperation,
+  PublicationStatus,
 } from '@multi-agent-ops/shared';
 import { AuthError } from './auth.js';
 import type { createBusinessDatabase } from './database.js';
 import {
   accounts,
+  configVersions,
   auditEvents,
   executionAttempts,
   taskContents,
@@ -25,11 +30,21 @@ import {
   taskReviews,
   taskApprovals,
   taskDecisions,
+  publicationOperations,
+  publicationDispatches,
+  publicationVerifications,
 } from './schema.js';
 import { activeAttempt, attemptModel, contentModel } from './execution-model.js';
 import { TaskExecutionService } from './task-execution-service.js';
 import { EditorialService } from './editorial-service.js';
 import type { EditorialRequest } from './editorial-service.js';
+import { AccountService } from './account-service.js';
+import { manualEntryReason } from './manual-publication-entry.js';
+import { manualRetryReason } from './manual-publication-retry.js';
+import { PublicationRetryService } from './publication-retry-service.js';
+import { PublicationResultService } from './publication-result-service.js';
+import { PublicationService } from './publication-service.js';
+import { publicationModel } from './publication-model.js';
 import { reviewEligible } from './manual-review.js';
 
 type Database = ReturnType<typeof createBusinessDatabase>['db'];
@@ -37,6 +52,7 @@ type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 type Connection = Database | Transaction;
 const replayMilliseconds = 24 * 60 * 60 * 1000;
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+const currentPublicationId = sql`coalesce(${tasks.activePublishOperationId},${tasks.publishedOperationId},(SELECT history.id FROM task_publication_operations history WHERE history.task_id=${tasks.id} AND history.content_version_id=${tasks.currentContentVersionId} ORDER BY history.created_at DESC,history.id DESC LIMIT 1))`;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function taskDetail(
@@ -46,10 +62,13 @@ function taskDetail(
   content: typeof taskContents.$inferSelect | null = null,
   enabled = true,
   workflow: {
+    publication?: PublishOperation | null;
+    publicationStatus?: PublicationStatus | null;
     review?: ReviewCycle | null;
     approval?: Approval | null;
     decision?: ManualDecision | null;
     configVersion?: number | null;
+    forbiddenTopics?: string[] | null;
   } = {},
 ): TaskDetail {
   if (!task.teamId || !task.createdBy)
@@ -59,7 +78,7 @@ function taskDetail(
   const unavailable = { allowed: false, reason: '该操作尚未实现。' };
   const editingLocked =
     activeAttempt(task.executionStatus ?? '') || !!(attempt && activeAttempt(attempt.status));
-  return {
+  const detail: TaskDetail = {
     task: {
       id: task.id,
       teamId: task.teamId,
@@ -75,8 +94,8 @@ function taskDetail(
       currentContentVersionId: task.currentContentVersionId,
       currentReviewCycleId: task.currentReviewCycleId,
       currentApprovalId: task.currentApprovalId,
-      activePublishOperationId: null,
-      publishedOperationId: null,
+      activePublishOperationId: task.activePublishOperationId,
+      publishedOperationId: task.publishedOperationId,
       sourceTaskId: null,
       terminatedBy: null,
       terminatedAt: null,
@@ -86,7 +105,7 @@ function taskDetail(
     },
     execution: task.executionStatus === 'needs_human' ? 'manual_required' : task.executionStatus,
     approval: task.approvalStatus,
-    publication: 'not_published',
+    publication: workflow.publication?.status ?? workflow.publicationStatus ?? 'not_published',
     reflection: 'not_triggered',
     currentStep: task.currentStep,
     errorMessage: task.errorMessage,
@@ -94,7 +113,7 @@ function taskDetail(
     currentContent: content ? contentModel(content) : null,
     currentReview: workflow.review ?? null,
     currentApproval: workflow.approval ?? null,
-    currentPublication: null,
+    currentPublication: workflow.publication ?? null,
     latestReflection: null,
     workLock:
       attempt && activeAttempt(attempt.status)
@@ -174,12 +193,53 @@ function taskDetail(
         reason: '需完成当前版本的基础审核并解决阻断及主观意见。',
       },
       publish: unavailable,
+      manual_publish_entry: unavailable,
       backfill: unavailable,
       verify: unavailable,
       retry_publish: unavailable,
       reflect: unavailable,
     },
   };
+  const entryReason = manualEntryReason({
+    task: detail.task,
+    account,
+    content: detail.currentContent,
+    ...workflow,
+    working: editingLocked || !!detail.workLock,
+  });
+  const reason =
+    entryReason ??
+    (workflow.publication?.status === 'failed'
+      ? '该版本交接已结束，请保存新版本后重新审核批准。'
+      : null);
+  const retryReason = manualRetryReason(detail, workflow.publication ?? null, entryReason);
+  detail.actions.retry_publish = { allowed: retryReason === null, reason: retryReason };
+  detail.actions.manual_publish_entry = { allowed: reason === null, reason };
+  detail.actions.publish = { allowed: reason === null, reason };
+  if (task.activePublishOperationId || task.publishedOperationId) {
+    for (const action of [
+      'save',
+      'start',
+      'retry',
+      'stop',
+      'review',
+      'approve',
+      'terminate',
+    ] as const)
+      detail.actions[action] = { allowed: false, reason: '文案已冻结，请先处理原发布交接。' };
+  }
+  detail.actions.backfill = {
+    allowed: workflow.publication?.status === 'awaiting_manual',
+    reason:
+      workflow.publication?.status === 'awaiting_manual' ? null : '当前没有待回填的人工交接。',
+  };
+  detail.actions.verify = {
+    allowed: ['verification_required', 'published'].includes(workflow.publication?.status ?? ''),
+    reason: ['verification_required', 'published'].includes(workflow.publication?.status ?? '')
+      ? null
+      : '当前交接不需要追加核实。',
+  };
+  return detail;
 }
 
 export class TaskService {
@@ -189,12 +249,73 @@ export class TaskService {
     private options: { executorMode?: 'mock' | 'disabled'; stepDelayMs?: number } = {},
   ) {}
 
+  accountRegistration(input: {
+    operation: 'getAccountRegistration' | 'registerAccount';
+    actor: Session['member'];
+    body?: OperationBodies['registerAccount'];
+    key: string;
+    requestId: string;
+  }) {
+    const service = new AccountService(this.db, this.now);
+    return input.operation === 'getAccountRegistration'
+      ? service.get(input.actor).then((data) => ({ data, replayed: false }))
+      : service.register({ ...input, body: input.body! });
+  }
+  async manualPublicationEntry(
+    input: OperationParams['getManualPublicationEntry'] & { actor: Session['member'] },
+  ): Promise<ResponseModels['ManualPublicationEntry']> {
+    const detail = await this.get(input);
+    if (!detail.actions.manual_publish_entry.allowed)
+      throw new AuthError(
+        409,
+        'APPROVAL_INVALID',
+        detail.actions.manual_publish_entry.reason ?? '当前版本不能进入人工发布。',
+      );
+    return {
+      account: detail.account!,
+      content: detail.currentContent!,
+      approval: detail.currentApproval!,
+      revision: detail.task.revision,
+    };
+  }
+
   editorial(input: EditorialRequest) {
     return new EditorialService(
       this.db,
       (connection, id, actor) => this.read(connection, id, actor),
       this.now,
     ).handle(input);
+  }
+
+  retryPublication(input: Parameters<PublicationRetryService['retry']>[0]) {
+    return new PublicationRetryService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+    ).retry(input);
+  }
+  publicationResult(input: Parameters<PublicationResultService['record']>[0]) {
+    return new PublicationResultService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+    ).record(input);
+  }
+  private publication() {
+    return new PublicationService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+    );
+  }
+  publish(input: Parameters<PublicationService['publish']>[0]) {
+    return this.publication().publish(input);
+  }
+  getPublication(input: Parameters<PublicationService['get']>[0]) {
+    return this.publication().get(input);
+  }
+  listPublications(input: Parameters<PublicationService['list']>[0]) {
+    return this.publication().list(input);
   }
 
   private execution() {
@@ -264,12 +385,14 @@ export class TaskService {
     try {
       const rows = await this.db
         .select({
+          publicationStatus: publicationOperations.status,
           task: tasks,
           attempt: executionAttempts,
           content: taskContents,
           review: taskReviews.data,
           approval: taskApprovals.data,
           configVersion: accounts.currentConfigVersion,
+          forbiddenTopics: configVersions.forbiddenTopics,
           // Preserve PostgreSQL microseconds for keyset pagination; JS Dates truncate them.
           time: sql<string>`to_char(${tasks.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
           account: {
@@ -278,6 +401,9 @@ export class TaskService {
             platform: accounts.platform,
             authorizationStatus: accounts.authorizationStatus,
             officialPublishAvailable: accounts.officialPublishAvailable,
+            platformAccountId: accounts.platformAccountId,
+            manualPublishEnabled: accounts.manualPublishEnabled,
+            registrationVersion: accounts.registrationVersion,
           },
         })
         .from(tasks)
@@ -296,6 +422,13 @@ export class TaskService {
           and(eq(accounts.id, tasks.accountId), eq(accounts.teamId, tasks.teamId)),
         )
 
+        .leftJoin(
+          configVersions,
+          and(
+            eq(configVersions.accountId, accounts.id),
+            eq(configVersions.version, accounts.currentConfigVersion),
+          ),
+        )
         .leftJoin(
           executionAttempts,
           and(
@@ -318,6 +451,13 @@ export class TaskService {
           taskApprovals,
           and(eq(taskApprovals.id, tasks.currentApprovalId), eq(taskApprovals.taskId, tasks.id)),
         )
+        .leftJoin(
+          publicationOperations,
+          and(
+            eq(publicationOperations.taskId, tasks.id),
+            eq(publicationOperations.id, currentPublicationId),
+          ),
+        )
         .where(
           and(
             eq(tasks.teamId, actor.teamId),
@@ -330,7 +470,12 @@ export class TaskService {
               : undefined,
             // Approval status is persisted and updated atomically with its bound version.
             query.approval ? eq(tasks.approvalStatus, query.approval) : undefined,
-            query.publication && query.publication !== 'not_published' ? sql`false` : undefined,
+            query.publication
+              ? eq(
+                  sql`coalesce(${publicationOperations.status},'not_published')`,
+                  query.publication,
+                )
+              : undefined,
             search
               ? or(sql`${tasks.title} ILIKE ${search}`, sql`${tasks.id}::text ILIKE ${search}`)
               : undefined,
@@ -344,24 +489,36 @@ export class TaskService {
       const page = rows.slice(0, limit);
       const last = page.at(-1);
       return {
-        items: page.map(({ task, account, attempt, content, review, approval, configVersion }) => {
-          const detail = taskDetail(
+        items: page.map(
+          ({
             task,
             account,
             attempt,
             content,
-            this.options.executorMode !== 'disabled',
-            { review, approval, configVersion },
-          );
-          return {
-            task: detail.task,
-            execution: detail.execution,
-            approval: detail.approval,
-            publication: detail.publication,
-            reflection: detail.reflection,
-            currentStep: detail.currentStep,
-          };
-        }),
+            review,
+            approval,
+            configVersion,
+            forbiddenTopics,
+            publicationStatus,
+          }) => {
+            const detail = taskDetail(
+              task,
+              account,
+              attempt,
+              content,
+              this.options.executorMode !== 'disabled',
+              { review, approval, configVersion, forbiddenTopics, publicationStatus },
+            );
+            return {
+              task: detail.task,
+              execution: detail.execution,
+              approval: detail.approval,
+              publication: detail.publication,
+              reflection: detail.reflection,
+              currentStep: detail.currentStep,
+            };
+          },
+        ),
         nextCursor:
           rows.length > limit && last
             ? Buffer.from(
@@ -398,12 +555,16 @@ export class TaskService {
           review: taskReviews.data,
           approval: taskApprovals.data,
           configVersion: accounts.currentConfigVersion,
+          forbiddenTopics: configVersions.forbiddenTopics,
           account: {
             id: accounts.id,
             displayName: accounts.displayName,
             platform: accounts.platform,
             authorizationStatus: accounts.authorizationStatus,
             officialPublishAvailable: accounts.officialPublishAvailable,
+            platformAccountId: accounts.platformAccountId,
+            manualPublishEnabled: accounts.manualPublishEnabled,
+            registrationVersion: accounts.registrationVersion,
           },
         })
         .from(tasks)
@@ -422,6 +583,13 @@ export class TaskService {
           and(eq(accounts.id, tasks.accountId), eq(accounts.teamId, tasks.teamId)),
         )
 
+        .leftJoin(
+          configVersions,
+          and(
+            eq(configVersions.accountId, accounts.id),
+            eq(configVersions.version, accounts.currentConfigVersion),
+          ),
+        )
         .leftJoin(
           executionAttempts,
           and(
@@ -454,6 +622,45 @@ export class TaskService {
             .orderBy(desc(taskDecisions.createdAt), desc(taskDecisions.id))
             .limit(1)
         : [];
+      const operationId = row.task.activePublishOperationId ?? row.task.publishedOperationId;
+      let [operation] = operationId
+        ? await connection
+            .select()
+            .from(publicationOperations)
+            .where(
+              and(
+                eq(publicationOperations.id, operationId),
+                eq(publicationOperations.taskId, taskId),
+              ),
+            )
+        : [];
+      if (operationId && !operation) throw new Error('Publication pointer is invalid');
+      if (!operationId && row.task.currentContentVersionId)
+        [operation] = await connection
+          .select()
+          .from(publicationOperations)
+          .where(
+            and(
+              eq(publicationOperations.taskId, taskId),
+              eq(publicationOperations.contentVersionId, row.task.currentContentVersionId),
+            ),
+          )
+          .orderBy(desc(publicationOperations.createdAt), desc(publicationOperations.id))
+          .limit(1);
+      const observations = operation
+        ? await connection
+            .select()
+            .from(publicationVerifications)
+            .where(eq(publicationVerifications.operationId, operation.id))
+            .orderBy(publicationVerifications.createdAt, publicationVerifications.id)
+        : [];
+      const dispatches = operation
+        ? await connection
+            .select()
+            .from(publicationDispatches)
+            .where(eq(publicationDispatches.operationId, operation.id))
+            .orderBy(publicationDispatches.dispatchNo)
+        : [];
       return taskDetail(
         row.task,
         row.account,
@@ -461,9 +668,17 @@ export class TaskService {
         row.content,
         this.options.executorMode !== 'disabled',
         {
+          publication: operation
+            ? publicationModel(
+                operation,
+                dispatches,
+                observations.map((item) => item.data),
+              )
+            : null,
           review: row.review,
           approval: row.approval,
           configVersion: row.configVersion,
+          forbiddenTopics: row.forbiddenTopics,
           decision: decision?.data ?? null,
         },
       );
@@ -561,7 +776,28 @@ export class TaskService {
             );
           if (!task) throw new AuthError(404, 'NOT_FOUND', '原任务不存在或已不可访问。');
           // Cached creates from before detail queries shipped lack this additive field.
-          return { data: { ...data, errorMessage: data.errorMessage ?? null }, replayed: true };
+          return {
+            data: {
+              ...data,
+              errorMessage: data.errorMessage ?? null,
+              account: data.account
+                ? {
+                    ...data.account,
+                    platformAccountId: data.account.platformAccountId ?? null,
+                    manualPublishEnabled: data.account.manualPublishEnabled ?? false,
+                    registrationVersion: data.account.registrationVersion ?? 0,
+                  }
+                : null,
+              actions: {
+                ...data.actions,
+                manual_publish_entry: data.actions.manual_publish_entry ?? {
+                  allowed: false,
+                  reason: '请刷新详情后核对目标账号与批准版本。',
+                },
+              },
+            },
+            replayed: true,
+          };
         }
         if (existing)
           await tx.delete(idempotencyRecords).where(eq(idempotencyRecords.id, existing.id));
@@ -572,6 +808,9 @@ export class TaskService {
             platform: accounts.platform,
             authorizationStatus: accounts.authorizationStatus,
             officialPublishAvailable: accounts.officialPublishAvailable,
+            platformAccountId: accounts.platformAccountId,
+            manualPublishEnabled: accounts.manualPublishEnabled,
+            registrationVersion: accounts.registrationVersion,
           })
           .from(accounts)
           .where(eq(accounts.teamId, actor.teamId))

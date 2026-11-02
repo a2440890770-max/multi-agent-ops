@@ -88,7 +88,7 @@ function validSummary(value: unknown): value is TaskSummary {
     typeof value.publication === 'string'
   );
 }
-function validDetail(value: unknown): value is TaskDetail {
+export function validDetail(value: unknown): value is TaskDetail {
   return (
     validSummary(value) &&
     object(value) &&

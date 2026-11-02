@@ -95,6 +95,7 @@ const task: TaskDetail = {
     review: unavailable,
     approve: unavailable,
     publish: unavailable,
+    manual_publish_entry: unavailable,
     backfill: unavailable,
     verify: unavailable,
     retry_publish: unavailable,
@@ -106,6 +107,9 @@ const task: TaskDetail = {
     platform: 'weibo',
     authorizationStatus: 'unconfigured',
     officialPublishAvailable: false,
+    platformAccountId: null,
+    manualPublishEnabled: false,
+    registrationVersion: 0,
   },
 };
 // Keep the fixture independent of the response-model key and generator's naming scheme.

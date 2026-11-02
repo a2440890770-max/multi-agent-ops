@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Role } from '@multi-agent-ops/shared';
 import { Empty, Notice, PageTitle, PendingButton } from '../components.js';
+import { AccountRegistration } from './AccountRegistration.js';
 import { ConfigSettings } from './ConfigSettings.js';
 
 const memories = [
@@ -275,7 +276,7 @@ export function Settings({ role }: { role: Role }) {
           <div className="tab-row panel-tabs">
             {[
               ['members', '团队成员'],
-              ['account', '账号授权'],
+              ['account', '目标账号与授权'],
               ['rules', '基础规则与版本'],
             ].map(([value, label]) => (
               <button
@@ -298,7 +299,8 @@ export function Settings({ role }: { role: Role }) {
               </>
             ) : tab === 'account' ? (
               <>
-                <h2>品牌官方微博</h2>
+                <AccountRegistration />
+                <h2>官方API授权</h2>
                 <Notice tone="warning">官方发布授权未配置；不能发起官方 API 发布。</Notice>
                 <PendingButton>前往官方授权</PendingButton>
                 <p className="muted">仅展示授权状态与验证结果，凭据不在页面明文展示。</p>

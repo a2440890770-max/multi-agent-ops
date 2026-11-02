@@ -2,62 +2,65 @@
 
 由 shared 契约生成；运行 `npm run contract:generate` 更新。通用权限、错误、超时与审计规则见 [接口契约说明](api-contract.md)。已实现登录、当前身份、退出、业务权限校验及 D4 创建草稿任务、同团队任务列表、筛选及详情查询；创建只保存输入，不自动执行；模拟执行的启动、停止、重试、历史及澄清答复/继续执行已实现，真实 Agent 及其他业务处理仍为 501 占位。
 
-| 操作 ID               | 方法与路径                                                         | 用途                                                |
-| --------------------- | ------------------------------------------------------------------ | --------------------------------------------------- |
-| login                 | POST /api/v1/auth/login                                            | [成员登录](#login)                                  |
-| logout                | POST /api/v1/auth/logout                                           | [退出并撤销当前会话](#logout)                       |
-| getMe                 | GET /api/v1/auth/me                                                | [当前成员与权限](#getme)                            |
-| listMembers           | GET /api/v1/members                                                | [查询团队成员](#listmembers)                        |
-| updateMember          | PATCH /api/v1/members/:memberId                                    | [修改成员角色或状态](#updatemember)                 |
-| getAccount            | GET /api/v1/accounts/:accountId                                    | [账号及授权摘要](#getaccount)                       |
-| authorizeAccount      | POST /api/v1/accounts/:accountId/authorization-sessions            | [创建官方账号授权会话](#authorizeaccount)           |
-| createTask            | POST /api/v1/tasks                                                 | [创建草稿任务，不自动执行](#createtask)             |
-| listTasks             | GET /api/v1/tasks                                                  | [分页查询任务及四维状态](#listtasks)                |
-| getTask               | GET /api/v1/tasks/:taskId                                          | [任务详情、锁与操作资格](#gettask)                  |
-| taskHistory           | GET /api/v1/tasks/:taskId/history                                  | [执行步骤、尝试与审计](#taskhistory)                |
-| clarifyTask           | POST /api/v1/tasks/:taskId/clarifications                          | [答复当前尝试的澄清问题](#clarifytask)              |
-| startTask             | POST /api/v1/tasks/:taskId/attempts                                | [首次启动完整执行](#starttask)                      |
-| stopAttempt           | POST /api/v1/tasks/:taskId/attempts/:attemptId/stop                | [停止本次执行以便编辑](#stopattempt)                |
-| retryTask             | POST /api/v1/tasks/:taskId/attempt-retries                         | [重新执行或显式重启已终止任务](#retrytask)          |
-| terminateTask         | POST /api/v1/tasks/:taskId/terminate                               | [终止任务并阻止后续发布](#terminatetask)            |
-| copyTask              | POST /api/v1/tasks/:taskId/copies                                  | [复制为新任务](#copytask)                           |
-| listContent           | GET /api/v1/tasks/:taskId/content-versions                         | [内容版本历史](#listcontent)                        |
-| getContent            | GET /api/v1/tasks/:taskId/content-versions/:versionId              | [读取某个不可变版本](#getcontent)                   |
-| compareContent        | GET /api/v1/tasks/:taskId/content-comparison                       | [比较两个已保存版本](#comparecontent)               |
-| saveContent           | POST /api/v1/tasks/:taskId/content-versions                        | [保存新内容版本，不自动审核](#savecontent)          |
-| submitReview          | POST /api/v1/tasks/:taskId/reviews                                 | [手动提交当前版本审核](#submitreview)               |
-| listReviews           | GET /api/v1/tasks/:taskId/reviews                                  | [审核周期历史](#listreviews)                        |
-| getReview             | GET /api/v1/tasks/:taskId/reviews/:reviewId                        | [审核结果、阻断与评分来源](#getreview)              |
-| stopReview            | POST /api/v1/tasks/:taskId/reviews/:reviewId/stop                  | [取消人工审核](#stopreview)                         |
-| decideReview          | POST /api/v1/tasks/:taskId/reviews/:reviewId/decisions             | [人工裁决主观分歧](#decidereview)                   |
-| listDecisions         | GET /api/v1/tasks/:taskId/reviews/:reviewId/decisions              | [读取人工裁决历史](#listdecisions)                  |
-| approveContent        | POST /api/v1/tasks/:taskId/approvals                               | [批准指定版本，等待用户点击发布](#approvecontent)   |
-| publishContent        | POST /api/v1/tasks/:taskId/publications                            | [点击发布或创建人工交接](#publishcontent)           |
-| listPublications      | GET /api/v1/tasks/:taskId/publications                             | [发布操作历史](#listpublications)                   |
-| getPublication        | GET /api/v1/tasks/:taskId/publications/:operationId                | [读取稳定发布操作、发送及核实证据](#getpublication) |
-| backfillPublication   | POST /api/v1/tasks/:taskId/publications/:operationId/backfills     | [人工交接回填或明确未发送](#backfillpublication)    |
-| verifyPublication     | POST /api/v1/tasks/:taskId/publications/:operationId/verifications | [追加人工核实，不发送文案](#verifypublication)      |
-| retryPublication      | POST /api/v1/tasks/:taskId/publications/:operationId/retries       | [明确失败后的人工重试](#retrypublication)           |
-| listMemories          | GET /api/v1/memories                                               | [按类型、用途、状态查询记忆](#listmemories)         |
-| getMemory             | GET /api/v1/memories/:memoryId                                     | [记忆详情与来源](#getmemory)                        |
-| editMemory            | PATCH /api/v1/memories/:memoryId                                   | [编辑记忆，创建新业务版本](#editmemory)             |
-| setMemoryAvailability | POST /api/v1/memories/:memoryId/availability                       | [明确禁用或启用记忆](#setmemoryavailability)        |
-| deleteMemory          | DELETE /api/v1/memories/:memoryId                                  | [删除记忆并立即停止召回](#deletememory)             |
-| confirmMemory         | POST /api/v1/memories/:memoryId/confirmations                      | [人工确认候选，创建独立已确认经验](#confirmmemory)  |
-| listMemorySync        | GET /api/v1/memories/:memoryId/sync-jobs                           | [受管同步/清理状态与失败范围](#listmemorysync)      |
-| retryMemorySync       | POST /api/v1/memories/:memoryId/sync-jobs/:jobId/retry             | [重试失败的同步/清理](#retrymemorysync)             |
-| createReflection      | POST /api/v1/tasks/:taskId/reflections                             | [手动触发复盘](#createreflection)                   |
-| listReflections       | GET /api/v1/tasks/:taskId/reflections                              | [复盘历史](#listreflections)                        |
-| getReflection         | GET /api/v1/tasks/:taskId/reflections/:reflectionId                | [证据、观察、假设与不确定性](#getreflection)        |
-| retryReflection       | POST /api/v1/tasks/:taskId/reflections/:reflectionId/retries       | [再次复盘，新建关联记录](#retryreflection)          |
-| saveCandidate         | POST /api/v1/tasks/:taskId/reflections/:reflectionId/candidates    | [把复盘建议保存为候选经验](#savecandidate)          |
-| getConfig             | GET /api/v1/config                                                 | [读取无密钥配置及版本](#getconfig)                  |
-| updateConfig          | PUT /api/v1/config                                                 | [保存完整配置新版本](#updateconfig)                 |
-| listExperiments       | GET /api/v1/experiments                                            | [离线实验摘要](#listexperiments)                    |
-| runExperiment         | POST /api/v1/experiments                                           | [运行已配置离线实验](#runexperiment)                |
-| getExperiment         | GET /api/v1/experiments/:experimentId                              | [实验摘要及 Langfuse 链接](#getexperiment)          |
-| nextBlindItem         | GET /api/v1/experiments/:experimentId/blind-items/next             | [读取当前成员未评分的匿名样本](#nextblinditem)      |
-| submitBlindScore      | POST /api/v1/experiments/:experimentId/blind-scores                | [提交人工盲评](#submitblindscore)                   |
+| 操作 ID                   | 方法与路径                                                         | 用途                                                                 |
+| ------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| login                     | POST /api/v1/auth/login                                            | [成员登录](#login)                                                   |
+| logout                    | POST /api/v1/auth/logout                                           | [退出并撤销当前会话](#logout)                                        |
+| getMe                     | GET /api/v1/auth/me                                                | [当前成员与权限](#getme)                                             |
+| listMembers               | GET /api/v1/members                                                | [查询团队成员](#listmembers)                                         |
+| updateMember              | PATCH /api/v1/members/:memberId                                    | [修改成员角色或状态](#updatemember)                                  |
+| getAccount                | GET /api/v1/accounts/:accountId                                    | [账号及授权摘要](#getaccount)                                        |
+| authorizeAccount          | POST /api/v1/accounts/:accountId/authorization-sessions            | [创建官方账号授权会话](#authorizeaccount)                            |
+| getAccountRegistration    | GET /api/v1/account-registration                                   | [读取团队目标微博账号登记](#getaccountregistration)                  |
+| registerAccount           | PUT /api/v1/account-registration                                   | [登记目标微博账号与人工操作资格](#registeraccount)                   |
+| getManualPublicationEntry | GET /api/v1/tasks/:taskId/manual-publication-entry                 | [核对人工发布入口的目标账号与已批准版本](#getmanualpublicationentry) |
+| createTask                | POST /api/v1/tasks                                                 | [创建草稿任务，不自动执行](#createtask)                              |
+| listTasks                 | GET /api/v1/tasks                                                  | [分页查询任务及四维状态](#listtasks)                                 |
+| getTask                   | GET /api/v1/tasks/:taskId                                          | [任务详情、锁与操作资格](#gettask)                                   |
+| taskHistory               | GET /api/v1/tasks/:taskId/history                                  | [执行步骤、尝试与审计](#taskhistory)                                 |
+| clarifyTask               | POST /api/v1/tasks/:taskId/clarifications                          | [答复当前尝试的澄清问题](#clarifytask)                               |
+| startTask                 | POST /api/v1/tasks/:taskId/attempts                                | [首次启动完整执行](#starttask)                                       |
+| stopAttempt               | POST /api/v1/tasks/:taskId/attempts/:attemptId/stop                | [停止本次执行以便编辑](#stopattempt)                                 |
+| retryTask                 | POST /api/v1/tasks/:taskId/attempt-retries                         | [重新执行或显式重启已终止任务](#retrytask)                           |
+| terminateTask             | POST /api/v1/tasks/:taskId/terminate                               | [终止任务并阻止后续发布](#terminatetask)                             |
+| copyTask                  | POST /api/v1/tasks/:taskId/copies                                  | [复制为新任务](#copytask)                                            |
+| listContent               | GET /api/v1/tasks/:taskId/content-versions                         | [内容版本历史](#listcontent)                                         |
+| getContent                | GET /api/v1/tasks/:taskId/content-versions/:versionId              | [读取某个不可变版本](#getcontent)                                    |
+| compareContent            | GET /api/v1/tasks/:taskId/content-comparison                       | [比较两个已保存版本](#comparecontent)                                |
+| saveContent               | POST /api/v1/tasks/:taskId/content-versions                        | [保存新内容版本，不自动审核](#savecontent)                           |
+| submitReview              | POST /api/v1/tasks/:taskId/reviews                                 | [手动提交当前版本审核](#submitreview)                                |
+| listReviews               | GET /api/v1/tasks/:taskId/reviews                                  | [审核周期历史](#listreviews)                                         |
+| getReview                 | GET /api/v1/tasks/:taskId/reviews/:reviewId                        | [审核结果、阻断与评分来源](#getreview)                               |
+| stopReview                | POST /api/v1/tasks/:taskId/reviews/:reviewId/stop                  | [取消人工审核](#stopreview)                                          |
+| decideReview              | POST /api/v1/tasks/:taskId/reviews/:reviewId/decisions             | [人工裁决主观分歧](#decidereview)                                    |
+| listDecisions             | GET /api/v1/tasks/:taskId/reviews/:reviewId/decisions              | [读取人工裁决历史](#listdecisions)                                   |
+| approveContent            | POST /api/v1/tasks/:taskId/approvals                               | [批准指定版本，等待用户点击发布](#approvecontent)                    |
+| publishContent            | POST /api/v1/tasks/:taskId/publications                            | [点击发布或创建人工交接](#publishcontent)                            |
+| listPublications          | GET /api/v1/tasks/:taskId/publications                             | [发布操作历史](#listpublications)                                    |
+| getPublication            | GET /api/v1/tasks/:taskId/publications/:operationId                | [读取稳定发布操作、发送及核实证据](#getpublication)                  |
+| backfillPublication       | POST /api/v1/tasks/:taskId/publications/:operationId/backfills     | [人工交接回填或明确未发送](#backfillpublication)                     |
+| verifyPublication         | POST /api/v1/tasks/:taskId/publications/:operationId/verifications | [追加人工核实，不发送文案](#verifypublication)                       |
+| retryPublication          | POST /api/v1/tasks/:taskId/publications/:operationId/retries       | [明确失败后的人工重试](#retrypublication)                            |
+| listMemories              | GET /api/v1/memories                                               | [按类型、用途、状态查询记忆](#listmemories)                          |
+| getMemory                 | GET /api/v1/memories/:memoryId                                     | [记忆详情与来源](#getmemory)                                         |
+| editMemory                | PATCH /api/v1/memories/:memoryId                                   | [编辑记忆，创建新业务版本](#editmemory)                              |
+| setMemoryAvailability     | POST /api/v1/memories/:memoryId/availability                       | [明确禁用或启用记忆](#setmemoryavailability)                         |
+| deleteMemory              | DELETE /api/v1/memories/:memoryId                                  | [删除记忆并立即停止召回](#deletememory)                              |
+| confirmMemory             | POST /api/v1/memories/:memoryId/confirmations                      | [人工确认候选，创建独立已确认经验](#confirmmemory)                   |
+| listMemorySync            | GET /api/v1/memories/:memoryId/sync-jobs                           | [受管同步/清理状态与失败范围](#listmemorysync)                       |
+| retryMemorySync           | POST /api/v1/memories/:memoryId/sync-jobs/:jobId/retry             | [重试失败的同步/清理](#retrymemorysync)                              |
+| createReflection          | POST /api/v1/tasks/:taskId/reflections                             | [手动触发复盘](#createreflection)                                    |
+| listReflections           | GET /api/v1/tasks/:taskId/reflections                              | [复盘历史](#listreflections)                                         |
+| getReflection             | GET /api/v1/tasks/:taskId/reflections/:reflectionId                | [证据、观察、假设与不确定性](#getreflection)                         |
+| retryReflection           | POST /api/v1/tasks/:taskId/reflections/:reflectionId/retries       | [再次复盘，新建关联记录](#retryreflection)                           |
+| saveCandidate             | POST /api/v1/tasks/:taskId/reflections/:reflectionId/candidates    | [把复盘建议保存为候选经验](#savecandidate)                           |
+| getConfig                 | GET /api/v1/config                                                 | [读取无密钥配置及版本](#getconfig)                                   |
+| updateConfig              | PUT /api/v1/config                                                 | [保存完整配置新版本](#updateconfig)                                  |
+| listExperiments           | GET /api/v1/experiments                                            | [离线实验摘要](#listexperiments)                                     |
+| runExperiment             | POST /api/v1/experiments                                           | [运行已配置离线实验](#runexperiment)                                 |
+| getExperiment             | GET /api/v1/experiments/:experimentId                              | [实验摘要及 Langfuse 链接](#getexperiment)                           |
+| nextBlindItem             | GET /api/v1/experiments/:experimentId/blind-items/next             | [读取当前成员未评分的匿名样本](#nextblinditem)                       |
+| submitBlindScore          | POST /api/v1/experiments/:experimentId/blind-scores                | [提交人工盲评](#submitblindscore)                                    |
 
 ## login
 
@@ -222,6 +225,9 @@ JSON 请求体（未列字段拒绝）：
 | platform                 | "weibo"                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | authorizationStatus      | "unconfigured" / "valid" / "expired" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | officialPublishAvailable | boolean                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| platformAccountId        | null / string                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| manualPublishEnabled     | boolean                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| registrationVersion      | number                               | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：只读，可重试；分页使用不透明游标。
 
@@ -256,6 +262,88 @@ JSON 请求体（未列字段拒绝）：
 超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
 
 转换：无业务状态转换。审计：account.authorization_requested。验收：AC-08、AC-14（关联设计，不表示已验收）。
+
+## getAccountRegistration
+
+`GET /api/v1/account-registration` — 读取团队目标微博账号登记。
+
+权限：admin / operator。
+
+前置条件与业务校验：同团队；无账号时 account=null；仅返回公开账号标识及人工操作资格，不返回凭据。
+
+成功：HTTP 200，`{ data: AccountRegistration, meta: { requestId, replayed } }`。data 字段：
+
+| 字段         | 类型          | 含义                                                |
+| ------------ | ------------- | --------------------------------------------------- |
+| account      | null / object | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| registeredBy | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| registeredAt | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：只读，可重试；分页使用不透明游标。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：访问日志。验收：AC-08（关联设计，不表示已验收）。
+
+## registerAccount
+
+`PUT /api/v1/account-registration` — 登记目标微博账号与人工操作资格。
+
+权限：admin。
+
+前置条件与业务校验：仅管理员；expectedVersion 比较登记版本（未登记为0）；启用须显式确认人工操作资格；不改变官方授权。真实UID变更或首次登记使相关旧批准失效并递增任务revision；幂等重放不重复更新。
+
+请求头：Idempotency-Key 必填，16—128 字符；X-CSRF-Token 必填（已过期退出会话例外）。
+
+JSON 请求体（未列字段拒绝）：
+
+| 字段                         | 必填 | 类型    | 校验                          |
+| ---------------------------- | ---- | ------- | ----------------------------- |
+| expectedVersion              | 是   | integer | 最小 0；最大 9007199254740991 |
+| displayName                  | 是   | string  | 最短 1；最长 100              |
+| platformAccountId            | 是   | string  | 匹配 ^[1-9][0-9]{0,19}$       |
+| manualPublishEnabled         | 是   | boolean | 见业务前置条件                |
+| manualAuthorizationConfirmed | 是   | boolean | 见业务前置条件                |
+| reason                       | 是   | string  | 最短 1；最长 2000             |
+
+成功：HTTP 200，`{ data: AccountRegistration, meta: { requestId, replayed } }`。data 字段：
+
+| 字段         | 类型          | 含义                                                |
+| ------------ | ------------- | --------------------------------------------------- |
+| account      | null / object | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| registeredBy | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| registeredAt | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：account.registered。验收：AC-05、AC-08（关联设计，不表示已验收）。
+
+## getManualPublicationEntry
+
+`GET /api/v1/tasks/:taskId/manual-publication-entry` — 核对人工发布入口的目标账号与已批准版本。
+
+权限：admin / operator。
+
+前置条件与业务校验：同团队；账号已登记且人工资格启用；当前版本、摘要、有效批准、审核和当前配置匹配；基础检查通过；任务开放且无工作/发布锁；只读预览，不创建交接、不冻结、不发送。
+
+路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+成功：HTTP 200，`{ data: ManualPublicationEntry, meta: { requestId, replayed } }`。data 字段：
+
+| 字段     | 类型           | 含义                                                |
+| -------- | -------------- | --------------------------------------------------- |
+| account  | Account        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| content  | ContentVersion | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval | Approval       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| revision | number         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：只读，可重试；分页使用不透明游标。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：访问日志。验收：AC-05、AC-08（关联设计，不表示已验收）。
 
 ## createTask
 
@@ -1080,7 +1168,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前版本、摘要、账号、审核、批准均匹配，账号授权有效，无历史成功发布。当前仅接入旧批准和版本不匹配的拒绝校验；有效请求仍返回 501，不创建发送记录或对外发布。后续官方渠道须 officialPublishAvailable。
+前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前版本、摘要、账号、审核、批准均匹配，账号授权有效，无历史成功发布。人工渠道校验真实账号登记、人工资格及当前审核配置，原子创建待人工发布交接与冻结快照，锁定任务并记录操作人；返回 202，不对外发布。官方渠道仍返回 501，后续须 officialPublishAvailable。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -1169,7 +1257,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：awaiting_manual；dispatchId 为当前人工交接；版本/账号匹配；published 必须平台 ID/链接/实际摘要匹配；不匹配或不确定进入待核实；not_published 须可靠未发送声明并 previousDispatchFenced=true。
+前置条件与业务校验：awaiting_manual；dispatchId、账号及版本须绑定原交接；published 须提供实际账号 UID、实际正文、微博单条链接，服务端计算摘要并核对链接账号，manualConfirmed=true 才能成功。差异或未确认进入待核实；not_published 须原因、manualConfirmed=true 和 previousDispatchFenced=true；人工填写的观察资料作为证据保存，evidenceIds 可为空。
 
 路径字段：`taskId`、`operationId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -1177,19 +1265,22 @@ JSON 请求体（未列字段拒绝）：
 
 JSON 请求体（未列字段拒绝）：
 
-| 字段                   | 必填 | 类型                                      | 校验                                    |
-| ---------------------- | ---- | ----------------------------------------- | --------------------------------------- |
-| expectedRevision       | 是   | integer                                   | 最小 1；最大 9007199254740991           |
-| contentVersionId       | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| dispatchId             | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| accountId              | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| conclusion             | 是   | "published" / "not_published" / "unknown" | 见业务前置条件                          |
-| platformPostId         | 否   | string                                    | 最短 1；最长 128                        |
-| url                    | 否   | string                                    | 最短 1；最长 2048；格式 uri             |
-| observedContentHash    | 否   | string                                    | 匹配 ^[a-f0-9]{64}$                     |
-| evidenceIds            | 是   | string[]                                  | 最少项 1；最多项 100                    |
-| note                   | 是   | string                                    | 最短 1；最长 2000                       |
-| previousDispatchFenced | 否   | boolean                                   | 见业务前置条件                          |
+| 字段                   | 必填 | 类型                                      | 校验                                     |
+| ---------------------- | ---- | ----------------------------------------- | ---------------------------------------- |
+| expectedRevision       | 是   | integer                                   | 最小 1；最大 9007199254740991            |
+| contentVersionId       | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| dispatchId             | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| accountId              | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| conclusion             | 是   | "published" / "not_published" / "unknown" | 见业务前置条件                           |
+| platformPostId         | 否   | string                                    | 最短 1；最长 128                         |
+| url                    | 否   | string                                    | 最短 1；最长 2048；格式 uri              |
+| observedContentHash    | 否   | string                                    | 匹配 ^[a-f0-9]{64}$                      |
+| evidenceIds            | 是   | string[]                                  | 最少项 0；最多项 100                     |
+| observedAccountUid     | 否   | string                                    | 最短 1；最长 20；匹配 ^[1-9][0-9]{0,19}$ |
+| observedBody           | 否   | string                                    | 最短 0；最长 20000                       |
+| manualConfirmed        | 否   | boolean                                   | 见业务前置条件                           |
+| note                   | 是   | string                                    | 最短 1；最长 2000                        |
+| previousDispatchFenced | 否   | boolean                                   | 见业务前置条件                           |
 
 成功：HTTP 202，`{ data: Publication, meta: { requestId, replayed } }`。data 字段：
 
@@ -1210,7 +1301,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：verification_required；证据必须归属本发送；成功须账号/版本/摘要匹配；not_published 必须有前次不会再生效的证据及 previousDispatchFenced=true；unknown/差异继续锁定；method 由此端点记为 manual，不接受客户端声称 official_query。
+前置条件与业务校验：verification_required，或已发布后补充证据；证据归属原发送。实际账号、原文和链接匹配且 manualConfirmed=true 才能确认成功；not_published 须明确原因及 manualConfirmed=true、previousDispatchFenced=true；unknown/差异继续锁定。已发布后矛盾证据只追加、不撤销成功事实。method 由服务端记为 manual；不访问微博自动核实。
 
 路径字段：`taskId`、`operationId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -1218,19 +1309,22 @@ JSON 请求体（未列字段拒绝）：
 
 JSON 请求体（未列字段拒绝）：
 
-| 字段                   | 必填 | 类型                                      | 校验                                    |
-| ---------------------- | ---- | ----------------------------------------- | --------------------------------------- |
-| expectedRevision       | 是   | integer                                   | 最小 1；最大 9007199254740991           |
-| contentVersionId       | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| dispatchId             | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| accountId              | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| conclusion             | 是   | "published" / "not_published" / "unknown" | 见业务前置条件                          |
-| platformPostId         | 否   | string                                    | 最短 1；最长 128                        |
-| url                    | 否   | string                                    | 最短 1；最长 2048；格式 uri             |
-| observedContentHash    | 否   | string                                    | 匹配 ^[a-f0-9]{64}$                     |
-| evidenceIds            | 是   | string[]                                  | 最少项 1；最多项 100                    |
-| note                   | 是   | string                                    | 最短 1；最长 2000                       |
-| previousDispatchFenced | 否   | boolean                                   | 见业务前置条件                          |
+| 字段                   | 必填 | 类型                                      | 校验                                     |
+| ---------------------- | ---- | ----------------------------------------- | ---------------------------------------- |
+| expectedRevision       | 是   | integer                                   | 最小 1；最大 9007199254740991            |
+| contentVersionId       | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| dispatchId             | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| accountId              | 是   | string                                    | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| conclusion             | 是   | "published" / "not_published" / "unknown" | 见业务前置条件                           |
+| platformPostId         | 否   | string                                    | 最短 1；最长 128                         |
+| url                    | 否   | string                                    | 最短 1；最长 2048；格式 uri              |
+| observedContentHash    | 否   | string                                    | 匹配 ^[a-f0-9]{64}$                      |
+| evidenceIds            | 是   | string[]                                  | 最少项 0；最多项 100                     |
+| observedAccountUid     | 否   | string                                    | 最短 1；最长 20；匹配 ^[1-9][0-9]{0,19}$ |
+| observedBody           | 否   | string                                    | 最短 0；最长 20000                       |
+| manualConfirmed        | 否   | boolean                                   | 见业务前置条件                           |
+| note                   | 是   | string                                    | 最短 1；最长 2000                        |
+| previousDispatchFenced | 否   | boolean                                   | 见业务前置条件                           |
 
 成功：HTTP 202，`{ data: Publication, meta: { requestId, replayed } }`。data 字段：
 
@@ -1251,7 +1345,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前版本、摘要、账号、审核、批准均匹配，账号授权有效，无历史成功发布。操作为 failed，前次有可靠未发布证据且不会迟到生效；previousDispatchId 匹配；同 operationId 增 dispatchNo；绝不自动重发。
+前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前版本、摘要、账号、审核、批准均匹配，账号授权有效，无历史成功发布。当前仅人工渠道；操作及前次发送均为 failed，保存了人工确认未发布、停止旧交接的证据；previousDispatchId 匹配，且仍是原批准、审核、文案、配置和账号；原因必填。同 operationId 增 dispatchNo 并重新占锁；每个 previousDispatchId 最多创建一条后继发送，重复或键过期均复用已有结果，不自动重发。
 
 路径字段：`taskId`、`operationId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -1575,12 +1669,15 @@ JSON 请求体（未列字段拒绝）：
 
 JSON 请求体（未列字段拒绝）：
 
-| 字段             | 必填 | 类型          | 校验                                    |
-| ---------------- | ---- | ------------- | --------------------------------------- |
-| expectedRevision | 是   | integer       | 最小 1；最大 9007199254740991           |
-| contentVersionId | 是   | string / null | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| attemptId        | 是   | string        | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| evidenceIds      | 是   | string[]      | 最少项 1；最多项 100                    |
+| 字段               | 必填 | 类型          | 校验                                     |
+| ------------------ | ---- | ------------- | ---------------------------------------- |
+| expectedRevision   | 是   | integer       | 最小 1；最大 9007199254740991            |
+| contentVersionId   | 是   | string / null | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| attemptId          | 是   | string        | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$  |
+| evidenceIds        | 是   | string[]      | 最少项 0；最多项 100                     |
+| observedAccountUid | 是   | string        | 最短 1；最长 20；匹配 ^[1-9][0-9]{0,19}$ |
+| observedBody       | 是   | string        | 最短 0；最长 20000                       |
+| manualConfirmed    | 是   | boolean       | 见业务前置条件                           |
 
 成功：HTTP 202，`{ data: Reflection, meta: { requestId, replayed } }`。data 字段：
 

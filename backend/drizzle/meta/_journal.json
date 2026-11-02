@@ -43,6 +43,34 @@
       "when": 1793351546786,
       "tag": "0005_manual_editorial",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793595681987,
+      "tag": "0006_d6_account_registration",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793599139768,
+      "tag": "0007_d6_manual_handoff",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793604841586,
+      "tag": "0008_d6_publication_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793610181387,
+      "tag": "0009_d6_manual_publication_retry",
+      "breakpoints": true
     }
   ]
 }

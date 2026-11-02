@@ -9,6 +9,8 @@ import type {
 import { useAuth } from '../auth.js';
 import { Notice } from '../components.js';
 import { allEditorialPages, editorialRequest } from '../editorial-api.js';
+import { PublicationHistory } from './PublicationResults.js';
+import { ManualPublicationEntry } from './ManualPublicationEntry.js';
 import { TaskRequestError } from '../task-api.js';
 
 type Draft = {
@@ -396,6 +398,12 @@ export function ManualEditorial({
               ` · ${detail.currentApproval.invalidatedReason}`}
           </Notice>
         )}
+        <ManualPublicationEntry
+          detail={detail}
+          editorialBlocked={dirty || locked}
+          onChanged={onChanged}
+        />
+        <PublicationHistory detail={detail} />
       </section>
       <section className="panel detail-panel" aria-labelledby="manual-review-title">
         <h2 id="manual-review-title">审核问题与阻断项</h2>
@@ -446,6 +454,7 @@ export function ManualEditorial({
             {!subjective.length &&
               !blocked &&
               !detail.actions.approve.allowed &&
+              !detail.currentPublication &&
               detail.task.lifecycle === 'open' && (
                 <Notice tone="warning">当前审核不能用于批准，请按最新版本和配置重新审核。</Notice>
               )}

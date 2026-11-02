@@ -236,6 +236,8 @@ function LoadedTaskDetail({ detail, reload }: { detail: TaskDetail; reload: () =
             {detail.account ? (
               <>
                 <p>{detail.account.displayName}</p>
+                <p>微博 UID：{detail.account.platformAccountId ?? '尚未登记'}</p>
+                <p>人工操作资格：{detail.account.manualPublishEnabled ? '已启用' : '未启用'}</p>
                 <p className="muted">
                   授权状态：
                   {

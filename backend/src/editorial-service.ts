@@ -46,7 +46,6 @@ export const editorialOperations = new Set([
   'approveContent',
   'getConfig',
   'updateConfig',
-  'publishContent',
 ]);
 export type EditorialRequest = {
   operation: string;
@@ -423,6 +422,8 @@ export class EditorialService {
       .where(and(eq(tasks.teamId, input.actor.teamId), eq(tasks.accountId, initial.accountId)))
       .orderBy(tasks.id)
       .for('update');
+    if (affected.some((task) => task.activePublishOperationId))
+      throw new AuthError(423, 'PUBLICATION_LOCKED', '账号存在未完成交接，暂不能修改配置。');
     for (const task of affected) {
       await invalidateApproval(tx, task, now, '账号配置已变更，需要重新审核和批准。');
       await tx
@@ -446,6 +447,8 @@ export class EditorialService {
       .where(and(eq(tasks.id, taskId), eq(tasks.teamId, input.actor.teamId)))
       .for('update');
     if (!task) throw new AuthError(404, 'NOT_FOUND', '任务不存在或不可访问。');
+    if (task.activePublishOperationId || task.publishedOperationId)
+      throw new AuthError(423, 'PUBLICATION_LOCKED', '文案已冻结，请先处理原发布交接。');
     const body = input.body as Body;
     if (task.revision !== body.expectedRevision)
       fail('REVISION_CONFLICT', '任务已更新，输入已保留；请比较服务器当前版本后重新操作。');
@@ -717,21 +720,6 @@ export class EditorialService {
       await this.audit(tx, input, now, 'approval.created', task.revision, task.revision + 1);
       return { status: 201, data: { approval, task: await this.read(tx, taskId, input.actor) } };
     }
-    const approval = detail.currentApproval;
-    if (
-      !approval ||
-      approval.status !== 'approved' ||
-      approval.id !== body.approvalId ||
-      approval.contentVersionId !== content.id ||
-      approval.contentHash !== body.contentHash ||
-      approval.accountId !== body.accountId ||
-      approval.reviewCycleId !== review!.id
-    )
-      fail('APPROVAL_INVALID', '批准已失效或与当前版本不匹配，拒绝发布。');
-    throw new AuthError(
-      501,
-      'NOT_IMPLEMENTED',
-      '批准校验通过；实际发布通道尚未接入，本次未发布内容。',
-    );
+    throw new AuthError(501, 'NOT_IMPLEMENTED', '该编辑审核操作尚未实现。');
   }
 }
