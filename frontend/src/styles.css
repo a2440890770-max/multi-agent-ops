@@ -788,6 +788,14 @@ td small {
   align-items: flex-start;
   margin: 18px 0;
 }
+.publication-guide ol {
+  padding-left: 22px;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.publication-guide li + li {
+  margin-top: 10px;
+}
 .pending-action {
   display: inline-flex;
   flex-direction: column;
@@ -1356,4 +1364,31 @@ details p {
   .editorial-comparison {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.account-check {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.8rem 0;
+}
+.account-check input {
+  width: auto;
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+
+.publication-results fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.publication-results details {
+  margin-top: 12px;
+}
+.publication-results summary {
+  cursor: pointer;
+  line-height: 1.8;
 }

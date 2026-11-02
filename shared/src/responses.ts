@@ -1,5 +1,6 @@
 import type {
   Account,
+  AccountRegistration,
   Approval,
   AuditEvent,
   BlindItem,
@@ -29,6 +30,13 @@ export interface ResponseModels {
   Member: Member;
   Members: Page<Member>;
   Account: Account;
+  AccountRegistration: AccountRegistration;
+  ManualPublicationEntry: {
+    account: Account;
+    content: ContentVersion;
+    approval: Approval;
+    revision: number;
+  };
   AuthorizationSession: { authorizationUrl: string; state: string; expiresAt: string };
   TaskDetail: TaskDetail;
   Tasks: Page<TaskSummary>;

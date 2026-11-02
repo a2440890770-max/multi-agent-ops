@@ -18,7 +18,22 @@ export function registerContractRoutes(
   auth: AuthService | undefined,
   tasks?: Pick<
     TaskService,
-    'create' | 'get' | 'list' | 'start' | 'retry' | 'stop' | 'history' | 'clarify' | 'editorial'
+    | 'create'
+    | 'get'
+    | 'list'
+    | 'start'
+    | 'retry'
+    | 'stop'
+    | 'history'
+    | 'clarify'
+    | 'editorial'
+    | 'accountRegistration'
+    | 'manualPublicationEntry'
+    | 'publish'
+    | 'getPublication'
+    | 'listPublications'
+    | 'publicationResult'
+    | 'retryPublication'
   >,
 ) {
   app.get('/api/v1/openapi.json', async () => getOpenApiDocument());
@@ -56,6 +71,101 @@ export function registerContractRoutes(
           },
         },
         handler: async (request, reply) => {
+          if (
+            ['getAccountRegistration', 'registerAccount', 'getManualPublicationEntry'].includes(
+              endpoint.operationId,
+            )
+          ) {
+            if (!tasks)
+              throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '目标账号服务尚未配置。');
+            if (!request.authSession) throw new AuthError(401, 'UNAUTHENTICATED', '请重新登录。');
+            const actor = request.authSession.member;
+            if (endpoint.operationId === 'getManualPublicationEntry') {
+              const data = await tasks.manualPublicationEntry({
+                ...(request.params as OperationParams['getManualPublicationEntry']),
+                actor,
+              });
+              return { data, meta: { requestId: request.id, replayed: false } };
+            }
+            const result = await tasks.accountRegistration({
+              operation: endpoint.operationId as 'getAccountRegistration' | 'registerAccount',
+              actor,
+              body: request.body as OperationBodies['registerAccount'],
+              key: request.headers['idempotency-key'] as string,
+              requestId: request.id,
+            });
+            return {
+              data: result.data,
+              meta: { requestId: request.id, replayed: result.replayed },
+            };
+          }
+          if (
+            [
+              'publishContent',
+              'getPublication',
+              'listPublications',
+              'backfillPublication',
+              'verifyPublication',
+              'retryPublication',
+            ].includes(endpoint.operationId)
+          ) {
+            if (!tasks)
+              throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '发布交接服务尚未配置。');
+            if (!request.authSession) throw new AuthError(401, 'UNAUTHENTICATED', '请重新登录。');
+            const actor = request.authSession.member;
+            const { taskId, operationId } = request.params as OperationParams['getPublication'];
+            if (endpoint.operationId === 'retryPublication') {
+              const result = await tasks.retryPublication({
+                taskId,
+                operationId,
+                actor,
+                body: request.body as OperationBodies['retryPublication'],
+                key: request.headers['idempotency-key'] as string,
+                requestId: request.id,
+              });
+              return reply.code(202).send({
+                data: result.data,
+                meta: { requestId: request.id, replayed: result.replayed },
+              });
+            }
+            if (['backfillPublication', 'verifyPublication'].includes(endpoint.operationId)) {
+              const result = await tasks.publicationResult({
+                taskId,
+                operationId,
+                actor,
+                kind: endpoint.operationId === 'backfillPublication' ? 'backfill' : 'verification',
+                body: request.body as OperationBodies['backfillPublication'],
+                key: request.headers['idempotency-key'] as string,
+                requestId: request.id,
+              });
+              return reply.code(202).send({
+                data: result.data,
+                meta: { requestId: request.id, replayed: result.replayed },
+              });
+            }
+            if (endpoint.operationId === 'publishContent') {
+              const result = await tasks.publish({
+                taskId,
+                actor,
+                body: request.body as OperationBodies['publishContent'],
+                key: request.headers['idempotency-key'] as string,
+                requestId: request.id,
+              });
+              return reply.code(202).send({
+                data: result.data,
+                meta: { requestId: request.id, replayed: result.replayed },
+              });
+            }
+            const data =
+              endpoint.operationId === 'getPublication'
+                ? await tasks.getPublication({ taskId, operationId, actor })
+                : await tasks.listPublications({
+                    taskId,
+                    actor,
+                    query: request.query as OperationQueries['listPublications'],
+                  });
+            return { data, meta: { requestId: request.id, replayed: false } };
+          }
           if (editorialOperations.has(endpoint.operationId)) {
             if (!tasks)
               throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '人工编辑审核服务尚未配置。');

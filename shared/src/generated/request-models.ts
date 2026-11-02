@@ -12,6 +12,16 @@ export interface OperationBodies {
   };
   getAccount: undefined;
   authorizeAccount: undefined;
+  getAccountRegistration: undefined;
+  registerAccount: {
+    expectedVersion: number;
+    displayName: string;
+    platformAccountId: string;
+    manualPublishEnabled: boolean;
+    manualAuthorizationConfirmed: boolean;
+    reason: string;
+  };
+  getManualPublicationEntry: undefined;
   createTask: {
     title: string;
     originalRequest: string;
@@ -84,6 +94,9 @@ export interface OperationBodies {
     url?: string;
     observedContentHash?: string;
     evidenceIds: string[];
+    observedAccountUid?: string;
+    observedBody?: string;
+    manualConfirmed?: boolean;
     note: string;
     previousDispatchFenced?: boolean;
   };
@@ -97,6 +110,9 @@ export interface OperationBodies {
     url?: string;
     observedContentHash?: string;
     evidenceIds: string[];
+    observedAccountUid?: string;
+    observedBody?: string;
+    manualConfirmed?: boolean;
     note: string;
     previousDispatchFenced?: boolean;
   };
@@ -123,6 +139,9 @@ export interface OperationBodies {
     contentVersionId: string | null;
     attemptId: string;
     evidenceIds: string[];
+    observedAccountUid: string;
+    observedBody: string;
+    manualConfirmed: boolean;
   };
   listReflections: undefined;
   getReflection: undefined;
@@ -164,6 +183,9 @@ export interface OperationQueries {
   updateMember: undefined;
   getAccount: undefined;
   authorizeAccount: undefined;
+  getAccountRegistration: undefined;
+  registerAccount: undefined;
+  getManualPublicationEntry: undefined;
   createTask: undefined;
   listTasks: {
     cursor?: string;
@@ -248,6 +270,9 @@ export interface OperationParams {
   updateMember: { memberId: string };
   getAccount: { accountId: string };
   authorizeAccount: { accountId: string };
+  getAccountRegistration: Record<string, never>;
+  registerAccount: Record<string, never>;
+  getManualPublicationEntry: { taskId: string };
   createTask: Record<string, never>;
   listTasks: Record<string, never>;
   getTask: { taskId: string };
@@ -304,6 +329,9 @@ export interface OperationResponses {
   updateMember: ResponseModels['Member'];
   getAccount: ResponseModels['Account'];
   authorizeAccount: ResponseModels['AuthorizationSession'];
+  getAccountRegistration: ResponseModels['AccountRegistration'];
+  registerAccount: ResponseModels['AccountRegistration'];
+  getManualPublicationEntry: ResponseModels['ManualPublicationEntry'];
   createTask: ResponseModels['TaskDetail'];
   listTasks: ResponseModels['Tasks'];
   getTask: ResponseModels['TaskDetail'];

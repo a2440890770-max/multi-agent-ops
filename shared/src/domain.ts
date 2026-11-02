@@ -54,6 +54,14 @@ export interface Account {
   platform: 'weibo';
   authorizationStatus: 'unconfigured' | 'valid' | 'expired';
   officialPublishAvailable: boolean;
+  platformAccountId: string | null;
+  manualPublishEnabled: boolean;
+  registrationVersion: number;
+}
+export interface AccountRegistration {
+  account: Account | null;
+  registeredBy: Id | null;
+  registeredAt: Timestamp | null;
 }
 export interface Failure {
   code: string;
@@ -202,6 +210,8 @@ export interface Approval {
 }
 export type PublishChannel = 'official_api' | 'manual';
 export interface PublishDispatch {
+  previousDispatchId: Id | null;
+  reason: string | null;
   id: Id;
   operationId: Id;
   dispatchNo: number;
@@ -217,6 +227,14 @@ export interface PublishDispatch {
   error: Failure | null;
 }
 export interface VerificationRecord {
+  kind: 'backfill' | 'verification';
+  requestedConclusion: 'published' | 'not_published' | 'unknown';
+  observedAccountUid: string | null;
+  observedBody: string | null;
+  note: string;
+  manualConfirmed: boolean;
+  previousDispatchFenced: boolean;
+  resultingStatus: PublicationStatus;
   id: Id;
   operationId: Id;
   dispatchId: Id;
@@ -232,7 +250,15 @@ export interface VerificationRecord {
   mismatchNote: string | null;
   createdAt: Timestamp;
 }
+export interface PublicationSnapshot {
+  content: ContentVersion;
+  account: Account;
+  approval: Approval;
+  configVersion: number;
+  frozenAt: Timestamp;
+}
 export interface PublishOperation {
+  snapshot: PublicationSnapshot;
   id: Id;
   taskId: Id;
   contentVersionId: Id;
@@ -346,6 +372,7 @@ export type TaskAction =
   | 'review'
   | 'approve'
   | 'publish'
+  | 'manual_publish_entry'
   | 'backfill'
   | 'verify'
   | 'retry_publish'

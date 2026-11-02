@@ -175,6 +175,8 @@ export class TaskExecutionService {
         }
         if (existing)
           await tx.delete(idempotencyRecords).where(eq(idempotencyRecords.id, existing.id));
+        if (task.activePublishOperationId || task.publishedOperationId)
+          throw new AuthError(423, 'PUBLICATION_LOCKED', '文案已冻结，请先处理原发布交接。');
         if (task.revision !== body.expectedRevision)
           throw new AuthError(409, 'REVISION_CONFLICT', '任务状态已更新，请刷新详情后重新操作。');
         if (task.lifecycle !== 'open')

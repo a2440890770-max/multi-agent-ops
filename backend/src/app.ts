@@ -12,7 +12,22 @@ type Dependencies = {
   auth?: AuthService;
   tasks?: Pick<
     TaskService,
-    'create' | 'get' | 'list' | 'start' | 'retry' | 'stop' | 'history' | 'clarify' | 'editorial'
+    | 'create'
+    | 'get'
+    | 'list'
+    | 'start'
+    | 'retry'
+    | 'stop'
+    | 'history'
+    | 'clarify'
+    | 'editorial'
+    | 'accountRegistration'
+    | 'manualPublicationEntry'
+    | 'publish'
+    | 'getPublication'
+    | 'listPublications'
+    | 'publicationResult'
+    | 'retryPublication'
   >;
   logging?: boolean;
   logStream?: Writable;

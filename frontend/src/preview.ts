@@ -37,6 +37,7 @@ export function makePreviewTask(scene: Scenario = 'ready', id = 'task-demo'): Ta
         'review',
         'approve',
         'publish',
+        'manual_publish_entry',
         'backfill',
         'verify',
         'retry_publish',
@@ -123,6 +124,19 @@ export function makePreviewTask(scene: Scenario = 'ready', id = 'task-demo'): Ta
     createdBy: 'member-demo',
     createdAt: date,
   };
+  const frozenApproval: NonNullable<TaskDetail['currentApproval']> = {
+    id: 'approval-demo',
+    taskId: id,
+    contentVersionId: 'version-3',
+    contentHash: hash,
+    accountId: 'account-demo',
+    reviewCycleId: 'review-demo',
+    status: 'approved',
+    approvedBy: 'member-demo',
+    approvedAt: date,
+    invalidatedAt: null,
+    invalidatedReason: null,
+  };
   const publication: TaskDetail['publication'] =
     scene === 'manual'
       ? 'awaiting_manual'
@@ -202,24 +216,26 @@ export function makePreviewTask(scene: Scenario = 'ready', id = 'task-demo'): Ta
           error: null,
         }
       : null,
-    currentApproval: approved
-      ? {
-          id: 'approval-demo',
-          taskId: id,
-          contentVersionId: 'version-3',
-          contentHash: hash,
-          accountId: 'account-demo',
-          reviewCycleId: 'review-demo',
-          status: 'approved',
-          approvedBy: 'member-demo',
-          approvedAt: date,
-          invalidatedAt: null,
-          invalidatedReason: null,
-        }
-      : null,
+    currentApproval: approved ? frozenApproval : null,
     currentPublication:
       publication !== 'not_published'
         ? {
+            snapshot: {
+              content: content!,
+              account: {
+                id: 'account-demo',
+                displayName: '品牌官方微博',
+                platform: 'weibo',
+                authorizationStatus: 'valid',
+                officialPublishAvailable: false,
+                platformAccountId: '1234567890',
+                manualPublishEnabled: true,
+                registrationVersion: 1,
+              },
+              approval: frozenApproval,
+              configVersion: 4,
+              frozenAt: date,
+            },
             id: 'operation-demo',
             taskId: id,
             contentVersionId: 'version-3',
@@ -229,6 +245,8 @@ export function makePreviewTask(scene: Scenario = 'ready', id = 'task-demo'): Ta
             currentDispatchId: 'dispatch-1',
             dispatches: [
               {
+                previousDispatchId: null,
+                reason: null,
                 id: 'dispatch-1',
                 operationId: 'operation-demo',
                 dispatchNo: 1,
@@ -274,6 +292,9 @@ export function makePreviewTask(scene: Scenario = 'ready', id = 'task-demo'): Ta
       platform: 'weibo',
       authorizationStatus: 'valid',
       officialPublishAvailable: false,
+      platformAccountId: null,
+      manualPublishEnabled: false,
+      registrationVersion: 0,
     },
   };
 }

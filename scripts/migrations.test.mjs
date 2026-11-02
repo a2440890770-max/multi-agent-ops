@@ -495,7 +495,7 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
   await runAllMigrations(c, 'migrate');
   const { account } = await seed(c);
   const before = (await c.query('SELECT * FROM tasks')).rows;
-  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 4, pending: 0 });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 8, pending: 0 });
   assert.deepEqual(
     (await c.query('SELECT * FROM tasks')).rows,
     before.map((row) => ({
@@ -510,6 +510,8 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
       current_approval_id: null,
       approval_status: 'not_requested',
       work_generation: 0,
+      active_publish_operation_id: null,
+      published_operation_id: null,
     })),
   );
   const [draft] = (
@@ -579,10 +581,10 @@ test('已知人工版本分支与当前任务迁移兼容，保留原历史、�
   ).rows;
   assert.deepEqual(await runLatestMigrations(c, 'status'), {
     applied: 1,
-    pending: 5,
+    pending: 9,
     retainedCompatible: 1,
   });
-  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 5, pending: 0 });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 9, pending: 0 });
   for (const entry of originalHistory)
     assert.equal(
       (
@@ -611,4 +613,39 @@ test('已知人工版本分支与当前任务迁移兼容，保留原历史、�
     editorialMigration.hash,
   ]);
   await assert.rejects(runLatestMigrations(c, 'migrate'), /迁移历史与本地 SQL 不一致/);
+});
+
+test('D6登记迁移保留官方授权；人工资格默认关闭，登记人及UID约束真实生效', async (t) => {
+  const c = await database(t);
+  await runLatestMigrations(c, 'migrate');
+  const { account, member } = await seed(c);
+  const initial = (await c.query('SELECT * FROM accounts WHERE id=$1', [account])).rows[0];
+  assert.equal(initial.manual_publish_enabled, false);
+  assert.equal(initial.registration_version, 0);
+  assert.equal(initial.authorization_status, 'unconfigured');
+  await assert.rejects(
+    c.query('UPDATE accounts SET manual_publish_enabled=true WHERE id=$1', [account]),
+    { code: '23514' },
+  );
+  await assert.rejects(
+    c.query('UPDATE accounts SET registration_version=-1 WHERE id=$1', [account]),
+    { code: '23514' },
+  );
+  await c.query(
+    "UPDATE accounts SET registration_version=1, platform_account_id='1234567890',registered_by=$2,registered_at=CURRENT_TIMESTAMP,manual_publish_enabled=true WHERE id=$1",
+    [account, member],
+  );
+  const registered = (await c.query('SELECT * FROM accounts WHERE id=$1', [account])).rows[0];
+  assert.equal(registered.manual_publish_enabled, true);
+  assert.equal(registered.authorization_status, initial.authorization_status);
+  assert.equal(registered.official_publish_available, initial.official_publish_available);
+  await assert.rejects(
+    c.query("UPDATE accounts SET platform_account_id='https://other.example' WHERE id=$1", [
+      account,
+    ]),
+    { code: '23514' },
+  );
+  await assert.rejects(c.query('UPDATE accounts SET registered_by=NULL WHERE id=$1', [account]), {
+    code: '23514',
+  });
 });

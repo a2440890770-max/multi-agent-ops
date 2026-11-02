@@ -1,3 +1,4 @@
+import type { PublicationSnapshot, PublicationStatus } from '@multi-agent-ops/shared';
 import { sql } from 'drizzle-orm';
 import type {
   Approval,
@@ -6,6 +7,7 @@ import type {
   ManualDecision,
   ReviewCycle,
   SourceRef,
+  VerificationRecord,
 } from '@multi-agent-ops/shared';
 import {
   type PgTableExtraConfigValue,
@@ -129,6 +131,10 @@ export const accounts = pgTable(
       .notNull()
       .default('unconfigured'),
     officialPublishAvailable: boolean('official_publish_available').notNull().default(false),
+    manualPublishEnabled: boolean('manual_publish_enabled').notNull().default(false),
+    registrationVersion: integer('registration_version').notNull().default(0),
+    registeredBy: uuid('registered_by').references(() => members.id),
+    registeredAt: time('registered_at'),
     credentialRef: text('credential_ref'),
     authorizationExpiresAt: time('authorization_expires_at'),
     lastVerifiedAt: time('last_verified_at'),
@@ -138,6 +144,11 @@ export const accounts = pgTable(
   },
   (t) => [
     unique('accounts_team_id_key').on(t.teamId),
+    check('accounts_registration_version_check', sql`${t.registrationVersion} >= 0`),
+    check(
+      'accounts_manual_registration_check',
+      sql`NOT ${t.manualPublishEnabled} OR (${t.registrationVersion} > 0 AND ${t.platformAccountId} IS NOT NULL AND ${t.platformAccountId} ~ '^[1-9][0-9]{0,19}$' AND ${t.registeredBy} IS NOT NULL AND ${t.registeredAt} IS NOT NULL)`,
+    ),
     check('accounts_platform_check', sql`${t.platform} = 'weibo'`),
     check(
       'accounts_authorization_status_check',
@@ -311,6 +322,8 @@ export const tasks = pgTable(
     currentContentVersionId: uuid('current_content_version_id'),
     currentReviewCycleId: uuid('current_review_cycle_id'),
     currentApprovalId: uuid('current_approval_id'),
+    activePublishOperationId: uuid('active_publish_operation_id'),
+    publishedOperationId: uuid('published_operation_id'),
     approvalStatus: text('approval_status')
       .$type<'not_requested' | 'pending' | 'approved' | 'invalidated'>()
       .notNull()
@@ -318,6 +331,16 @@ export const tasks = pgTable(
     workGeneration: integer('work_generation').notNull().default(0),
   },
   (t): PgTableExtraConfigValue[] => [
+    foreignKey({
+      name: 'tasks_active_publication_fk',
+      columns: [t.id, t.activePublishOperationId],
+      foreignColumns: [publicationOperations.taskId, publicationOperations.id],
+    }),
+    foreignKey({
+      name: 'tasks_published_publication_fk',
+      columns: [t.id, t.publishedOperationId],
+      foreignColumns: [publicationOperations.taskId, publicationOperations.id],
+    }),
     check(
       'tasks_approval_status_check',
       sql`${t.approvalStatus} IN ('not_requested','pending','approved','invalidated')`,
@@ -660,6 +683,150 @@ export const taskApprovals = pgTable(
     check(
       'task_approvals_binding_check',
       sql`${t.data}->>'id' = ${t.id}::text AND ${t.data}->>'taskId' = ${t.taskId}::text AND ${t.data}->>'contentVersionId' = ${t.contentVersionId}::text AND ${t.data}->>'reviewCycleId' = ${t.reviewCycleId}::text AND ${t.data}->>'accountId' = ${t.accountId}::text AND ${t.data}->>'status' IN ('approved','invalidated')`,
+    ),
+  ],
+);
+
+export const publicationOperations = pgTable(
+  'task_publication_operations',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id),
+    contentVersionId: uuid('content_version_id').notNull(),
+    contentHash: text('content_hash').notNull(),
+    accountId: uuid('account_id').notNull(),
+    approvalId: uuid('approval_id').notNull(),
+    configVersion: integer('config_version').notNull(),
+    snapshot: jsonb('snapshot').$type<PublicationSnapshot>().notNull(),
+    status: text('status').$type<PublicationStatus>().notNull(),
+    currentDispatchId: uuid('current_dispatch_id').notNull(),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => members.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('publication_operations_task_id_key').on(t.taskId, t.id),
+    unique('publication_operations_business_key').on(t.taskId, t.contentVersionId, t.accountId),
+    unique('publication_operations_approval_key').on(t.id, t.approvalId),
+    uniqueIndex('publication_operations_active_task_idx')
+      .on(t.taskId)
+      .where(sql`${t.status} IN ('awaiting_manual','publishing','verification_required')`),
+    uniqueIndex('publication_operations_published_task_idx')
+      .on(t.taskId)
+      .where(sql`${t.status} = 'published'`),
+    foreignKey({
+      name: 'publication_operations_content_fk',
+      columns: [t.taskId, t.contentVersionId],
+      foreignColumns: [taskContents.taskId, taskContents.id],
+    }),
+    foreignKey({
+      name: 'publication_operations_approval_fk',
+      columns: [t.taskId, t.approvalId],
+      foreignColumns: [taskApprovals.taskId, taskApprovals.id],
+    }),
+    foreignKey({
+      name: 'publication_operations_config_fk',
+      columns: [t.accountId, t.configVersion],
+      foreignColumns: [configVersions.accountId, configVersions.version],
+    }),
+    foreignKey({
+      name: 'publication_operations_current_dispatch_fk',
+      columns: [t.id, t.currentDispatchId],
+      foreignColumns: [publicationDispatches.operationId, publicationDispatches.id],
+    }),
+    check(
+      'publication_operations_status_check',
+      sql`${t.status} IN ('awaiting_manual','publishing','verification_required','published','failed')`,
+    ),
+    check(
+      'publication_operations_snapshot_check',
+      sql`(${t.snapshot}->'content'->>'id' = ${t.contentVersionId}::text AND ${t.snapshot}->'content'->>'taskId' = ${t.taskId}::text AND ${t.snapshot}->'content'->>'contentHash' = ${t.contentHash} AND ${t.contentHash} = encode(sha256(convert_to(${t.snapshot}->'content'->>'body','UTF8')),'hex') AND ${t.snapshot}->'account'->>'id' = ${t.accountId}::text AND ${t.snapshot}->'account'->>'platformAccountId' ~ '^[1-9][0-9]{0,19}$' AND ${t.snapshot}->'approval'->>'id' = ${t.approvalId}::text AND ${t.snapshot}->'approval'->>'contentVersionId' = ${t.contentVersionId}::text AND ${t.snapshot}->'approval'->>'accountId' = ${t.accountId}::text AND ${t.snapshot}->'approval'->>'contentHash' = ${t.contentHash} AND (${t.snapshot}->>'configVersion')::integer = ${t.configVersion}) IS TRUE`,
+    ),
+  ],
+);
+export const publicationDispatches = pgTable(
+  'task_publication_dispatches',
+  {
+    id: uuid('id').primaryKey(),
+    operationId: uuid('operation_id').notNull(),
+    dispatchNo: integer('dispatch_no').notNull(),
+    previousDispatchId: uuid('previous_dispatch_id'),
+    reason: text('reason'),
+    approvalId: uuid('approval_id').notNull(),
+    channel: text('channel').$type<'manual' | 'official_api'>().notNull(),
+    status: text('status').$type<PublicationStatus>().notNull(),
+    startedBy: uuid('started_by')
+      .notNull()
+      .references(() => members.id),
+    startedAt: time('started_at').notNull(),
+    finishedAt: time('finished_at'),
+    providerRequestId: text('provider_request_id'),
+    platformPostId: text('platform_post_id'),
+    url: text('url'),
+    error: jsonb('error').$type<Failure>(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('publication_dispatches_operation_id_key').on(t.operationId, t.id),
+    unique('publication_dispatches_number_key').on(t.operationId, t.dispatchNo),
+    unique('publication_dispatches_previous_key').on(t.operationId, t.previousDispatchId),
+    foreignKey({
+      name: 'publication_dispatches_previous_fk',
+      columns: [t.operationId, t.previousDispatchId],
+      foreignColumns: [publicationDispatches.operationId, publicationDispatches.id],
+    }),
+    check(
+      'publication_dispatches_retry_check',
+      sql`(${t.dispatchNo}=1 AND ${t.previousDispatchId} IS NULL AND ${t.reason} IS NULL) OR (${t.dispatchNo}>1 AND ${t.previousDispatchId} IS NOT NULL AND length(btrim(${t.reason}))>0 AND ${t.reason} IS NOT NULL)`,
+    ),
+    foreignKey({
+      name: 'publication_dispatches_operation_approval_fk',
+      columns: [t.operationId, t.approvalId],
+      foreignColumns: [publicationOperations.id, publicationOperations.approvalId],
+    }),
+    check('publication_dispatches_number_check', sql`${t.dispatchNo} >= 1`),
+    check('publication_dispatches_channel_check', sql`${t.channel} IN ('manual','official_api')`),
+    check(
+      'publication_dispatches_status_check',
+      sql`${t.status} IN ('awaiting_manual','publishing','verification_required','published','failed')`,
+    ),
+  ],
+);
+
+export const publicationVerifications = pgTable(
+  'task_publication_verifications',
+  {
+    id: uuid('id').primaryKey(),
+    operationId: uuid('operation_id').notNull(),
+    dispatchId: uuid('dispatch_id').notNull(),
+    actorId: uuid('actor_id')
+      .notNull()
+      .references(() => members.id),
+    factHash: text('fact_hash').notNull(),
+    data: jsonb('data').$type<VerificationRecord>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique('publication_verifications_fact_key').on(t.operationId, t.factHash),
+    foreignKey({
+      name: 'publication_verifications_dispatch_fk',
+      columns: [t.operationId, t.dispatchId],
+      foreignColumns: [publicationDispatches.operationId, publicationDispatches.id],
+    }),
+    check(
+      'publication_verifications_binding_check',
+      sql`(${t.data}->>'id' = ${t.id}::text AND ${t.data}->>'operationId' = ${t.operationId}::text AND ${t.data}->>'dispatchId' = ${t.dispatchId}::text AND ${t.data}->>'actorId' = ${t.actorId}::text AND ${t.data}->>'method' = 'manual' AND ${t.data}->>'conclusion' IN ('published','not_published','unknown') AND length(btrim(${t.data}->>'note')) > 0 AND ${t.data}->>'resultingStatus' IN ('verification_required','published','failed') AND ${t.factHash} ~ '^[a-f0-9]{64}$') IS TRUE`,
+    ),
+    check(
+      'publication_verifications_body_check',
+      sql`${t.data}->>'observedBody' IS NULL OR (${t.data}->>'observedContentHash' = encode(sha256(convert_to(${t.data}->>'observedBody','UTF8')),'hex')) IS TRUE`,
+    ),
+    check(
+      'publication_verifications_confirmation_check',
+      sql`(${t.data}->>'conclusion' <> 'published' OR ((${t.data}->>'manualConfirmed')::boolean AND ${t.data}->>'observedBody' IS NOT NULL AND ${t.data}->>'observedAccountUid' IS NOT NULL AND ${t.data}->>'url' IS NOT NULL)) IS TRUE AND (${t.data}->>'conclusion' <> 'not_published' OR ((${t.data}->>'manualConfirmed')::boolean AND (${t.data}->>'previousDispatchFenced')::boolean)) IS TRUE`,
     ),
   ],
 );

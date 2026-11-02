@@ -1,0 +1,5 @@
+ALTER TABLE "task_publication_dispatches" ADD COLUMN "previous_dispatch_id" uuid;--> statement-breakpoint
+ALTER TABLE "task_publication_dispatches" ADD COLUMN "reason" text;--> statement-breakpoint
+ALTER TABLE "task_publication_dispatches" ADD CONSTRAINT "publication_dispatches_previous_fk" FOREIGN KEY ("operation_id","previous_dispatch_id") REFERENCES "public"."task_publication_dispatches"("operation_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "task_publication_dispatches" ADD CONSTRAINT "publication_dispatches_previous_key" UNIQUE("operation_id","previous_dispatch_id");--> statement-breakpoint
+ALTER TABLE "task_publication_dispatches" ADD CONSTRAINT "publication_dispatches_retry_check" CHECK (("task_publication_dispatches"."dispatch_no"=1 AND "task_publication_dispatches"."previous_dispatch_id" IS NULL AND "task_publication_dispatches"."reason" IS NULL) OR ("task_publication_dispatches"."dispatch_no">1 AND "task_publication_dispatches"."previous_dispatch_id" IS NOT NULL AND length(btrim("task_publication_dispatches"."reason"))>0 AND "task_publication_dispatches"."reason" IS NOT NULL));
