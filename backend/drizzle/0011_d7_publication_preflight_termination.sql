@@ -1,0 +1,7 @@
+ALTER TABLE "execution_attempts" DROP CONSTRAINT "execution_attempts_cancel_scope_check";--> statement-breakpoint
+ALTER TABLE "tasks" ADD COLUMN "terminated_by" uuid;--> statement-breakpoint
+ALTER TABLE "tasks" ADD COLUMN "terminated_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "tasks" ADD COLUMN "termination_reason" text;--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_terminated_by_members_id_fk" FOREIGN KEY ("terminated_by") REFERENCES "public"."members"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "execution_attempts" ADD CONSTRAINT "execution_attempts_cancel_scope_check" CHECK ("execution_attempts"."cancel_scope" IS NULL OR "execution_attempts"."cancel_scope" IN ('stop_attempt','terminate_task'));--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_termination_record_check" CHECK (("tasks"."terminated_by" IS NULL AND "tasks"."terminated_at" IS NULL AND "tasks"."termination_reason" IS NULL) OR ("tasks"."lifecycle" = 'terminated' AND "tasks"."terminated_by" IS NOT NULL AND "tasks"."terminated_at" IS NOT NULL AND "tasks"."termination_reason" IS NOT NULL AND length(btrim("tasks"."termination_reason")) > 0));

@@ -5,7 +5,7 @@ const url = process.env.TASK_TEST_DATABASE_URL;
 if (!url || !/^tasks_test_[a-f0-9]{12}$/.test(new URL(url).pathname.slice(1)))
   throw new Error('Mock worker fixture requires an isolated tasks_test database.');
 const database = createBusinessDatabase(url);
-const worker = new MockTaskExecutor(database.db, { pollMs: 50 });
+const worker = new MockTaskExecutor(database.db, { pollMs: 50, heartbeatMs: 100, leaseMs: 500 });
 let closing = false;
 async function close() {
   if (closing) return;

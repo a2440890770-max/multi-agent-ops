@@ -29,9 +29,11 @@ type Input = {
   configVersion?: number | null;
   forbiddenTopics?: string[] | null;
   working: boolean;
+  cancellationRequested?: boolean;
 };
 export function manualEntryReason(input: Input): string | null {
   const { task, account, content, approval, review } = input;
+  if (input.cancellationRequested) return '任务已请求终止，不能继续发布。';
   if (task.lifecycle !== 'open' || task.publishedOperationId)
     return '任务已结束，不能进入人工发布。';
   if (task.activePublishOperationId) return '已有未完成的发布交接，请先处理原操作。';

@@ -116,6 +116,44 @@ export interface Task {
   terminatedAt: Timestamp | null;
   terminationReason: string | null;
 }
+export interface ExecutionLimits {
+  callTimeoutMs: number;
+  stepTimeoutMs: number;
+  attemptTimeoutMs: number;
+  maxRetries: number;
+  retryBaseMs: number;
+  maxCalls: number;
+  maxTokens: number;
+  maxCostMicrosCny: number;
+}
+export interface ExecutionCall {
+  id: Id;
+  taskId: Id;
+  attemptId: Id;
+  stepId: Id;
+  callNo: number;
+  retryNo: number;
+  kind: 'simulation' | 'model' | 'search' | 'readonly';
+  status: 'running' | 'succeeded' | 'failed' | 'timed_out' | 'interrupted';
+  pricingRef: string;
+  reservedTokens: number;
+  reservedCostMicrosCny: number;
+  chargedTokens: number;
+  chargedCostMicrosCny: number;
+  tokensKnown: boolean;
+  costKnown: boolean;
+  startedAt: Timestamp;
+  deadlineAt: Timestamp;
+  finishedAt: Timestamp | null;
+  error: Failure | null;
+}
+export interface ExecutionBudget {
+  taskId: Id;
+  limits: ExecutionLimits;
+  calls: number;
+  chargedTokens: number;
+  chargedCostMicrosCny: number;
+}
 export interface ExecutionAttempt {
   id: Id;
   taskId: Id;
@@ -137,6 +175,11 @@ export interface ExecutionAttempt {
   finishedAt: Timestamp | null;
   error: Failure | null;
   traceUrl: string | null;
+  control?: {
+    limits: ExecutionLimits | null;
+    activeElapsedMs: number;
+    activeSince: Timestamp | null;
+  };
 }
 export interface ContentVersion {
   id: Id;
@@ -208,7 +251,8 @@ export interface Approval {
   invalidatedAt: Timestamp | null;
   invalidatedReason: string | null;
 }
-export type PublishChannel = 'official_api' | 'manual';
+// Simulation is an internal test transport; HTTP publish requests cannot select it.
+export type PublishChannel = 'official_api' | 'manual' | 'simulation';
 export interface PublishDispatch {
   previousDispatchId: Id | null;
   reason: string | null;
@@ -337,6 +381,12 @@ export interface AgentStep {
   sourceRefs: SourceRef[];
   usedMemoryRefs: MemoryRef[];
   durationMs: number | null;
+  execution?: {
+    startedAt: Timestamp | null;
+    finishedAt: Timestamp | null;
+    retryCount: number;
+    nextRetryAt: Timestamp | null;
+  };
   error: Failure | null;
   traceUrl: string | null;
 }

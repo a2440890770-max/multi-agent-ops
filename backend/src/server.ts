@@ -9,8 +9,12 @@ import { MockTaskExecutor } from './mock-task-executor.js';
 
 const business = config.databaseUrl ? createBusinessDatabase(config.databaseUrl) : undefined;
 const auth = business && config.auth ? new AuthService(business.db, config.auth) : undefined;
-const executor =
-  business && config.taskExecutorMode === 'mock' ? new MockTaskExecutor(business.db) : undefined;
+const executor = business
+  ? new MockTaskExecutor(business.db, {
+      ...config.taskExecutorPolicy,
+      enabled: config.taskExecutorMode === 'mock',
+    })
+  : undefined;
 
 const pool = config.databaseUrl
   ? new pg.Pool({
@@ -26,6 +30,7 @@ const app = createApp({
     ? {
         tasks: new TaskService(business.db, () => new Date(), {
           executorMode: config.taskExecutorMode,
+          executionLimits: config.executionLimits,
         }),
       }
     : {}),

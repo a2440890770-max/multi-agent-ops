@@ -5,6 +5,8 @@ import { useAuth } from '../auth.js';
 import { getTaskDetail, TaskRequestError } from '../task-api.js';
 import { approvalLabels, executionLabels, publicationLabels } from '../task-labels.js';
 import { TaskExecutionControls, TaskExecutionHistory, useTaskExecution } from './TaskExecution.js';
+import { TaskTermination } from './TaskTermination.js';
+import { TaskExecutionProgress } from './TaskExecutionProgress.js';
 import { TaskClarifications } from './TaskClarifications.js';
 import { ManualEditorial } from './ManualEditorial.js';
 
@@ -45,7 +47,11 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
   }, [taskId, revision, refresh]);
   const reload = () => setRevision((value) => value + 1);
   useEffect(() => {
-    if (state.status !== 'ready' || !['queued', 'running'].includes(state.detail.execution ?? ''))
+    if (
+      state.status !== 'ready' ||
+      (!['queued', 'running'].includes(state.detail.execution ?? '') &&
+        state.detail.publication !== 'publishing')
+    )
       return;
     const timer = window.setTimeout(() => setRevision((value) => value + 1), 1500);
     return () => window.clearTimeout(timer);
@@ -174,21 +180,7 @@ function LoadedTaskDetail({ detail, reload }: { detail: TaskDetail; reload: () =
               <p className="muted">未提供参考资料。</p>
             )}
           </section>
-          <section className="panel detail-panel" aria-labelledby="progress-title">
-            <h2 id="progress-title">执行进度</h2>
-            <p>
-              <strong>当前步骤：</strong>
-              {detail.currentStep ?? '尚未开始'}
-            </p>
-            {detail.errorMessage ? (
-              <Notice tone="danger">{detail.errorMessage}</Notice>
-            ) : (
-              <p className="muted">暂无错误信息。</p>
-            )}
-            {detail.currentAttempt?.executorMode === 'mock' && (
-              <p className="muted">当前为模拟执行，进度和步骤已保存至数据库。</p>
-            )}
-          </section>
+          <TaskExecutionProgress detail={detail} />
           {detail.currentContent && (
             <section className="panel detail-panel">
               <h2>当前版本预览</h2>
@@ -216,6 +208,11 @@ function LoadedTaskDetail({ detail, reload }: { detail: TaskDetail; reload: () =
         </div>
         <aside>
           <TaskExecutionControls detail={detail} execution={execution} />
+          <TaskTermination
+            detail={detail}
+            onChanged={reload}
+            blocked={execution.busy || !!execution.pending}
+          />
           <section className="panel detail-panel" aria-labelledby="task-info-title">
             <h2 id="task-info-title">任务信息</h2>
             <dl className="task-metadata">

@@ -434,7 +434,7 @@ export const endpoints: readonly Endpoint[] = [
     body: input({ ...revision, reason }),
     response: 'TaskDetail',
     conditions:
-      '未发布且无发布锁；允许运行工作存在，原子置 terminated、失效批准并取消所有工作；停止未确认仍保留工作槽。',
+      '同团队管理员或运营人员，比较 expectedRevision 并记录终止人、时间和原因；原子终止任务、失效批准并停止当前模拟执行，隔离旧代次。人工交接、已取得发送占用或待核实的发布不得直接终止；内部模拟发送尚未取得占用时可记为未发送失败并解锁。重复终止保留原事实，不支持恢复或撤回已发内容。',
     transitions: ['E10', 'E11', 'E12', 'C08', 'A06'],
     audit: 'task.terminated',
     ac: ['AC-07'],

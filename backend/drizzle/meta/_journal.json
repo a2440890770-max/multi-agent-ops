@@ -71,6 +71,34 @@
       "when": 1793610181387,
       "tag": "0009_d6_manual_publication_retry",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793682557539,
+      "tag": "0010_d7_publication_send_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793684665390,
+      "tag": "0011_d7_publication_preflight_termination",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793689031881,
+      "tag": "0012_d9_execution_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793692701604,
+      "tag": "0013_d9_execution_limits",
+      "breakpoints": true
     }
   ]
 }

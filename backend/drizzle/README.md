@@ -106,3 +106,19 @@ npm run check
 ## D6 同版本重新交接
 
 `0009_d6_manual_publication_retry.sql` 在发送记录增加 previous_dispatch_id 和 reason。原有首次发送保持两个字段为空；后继发送要求关联同操作的前次发送并有非空原因。唯一键 `(operation_id, previous_dispatch_id)` 使同一前次发送最多生成一个后继，独立于 HTTP 幂等键的有效期；已有不可变触发器同时保护这两个新增身份字段。迁移不新建交接或修改已有结果。
+
+## D7 发送占用与未决发送防重
+
+`0010_d7_publication_send_claims.sql` 新增 `task_publication_send_claims`，每个发送编号最多取得一次不可变的适配器调用占用；复合外键绑定原操作与发送。新增部分唯一索引，使同操作最多有一个未决发送；内部模拟通道仅供测试注入，普通 HTTP 契约不能选择该通道。迁移不调用外部 API。验收与隔离测试方式见[发布防重说明](../../docs/acceptance/publication-deduplication.md)。
+
+## D7 发送前校验与任务终止
+
+`0011_d7_publication_preflight_termination.sql` 为任务增加终止人、时间与原因及其完整性/成员约束；执行尝试取消范围增加 `terminate_task`。迁移保留原有历史和旧终止状态，不伪造旧任务元数据，不发起外部调用。业务规则与验收见[发送前校验与任务终止](../../docs/acceptance/publication-preflight-termination.md)。
+
+## D9 第一批：执行权与租约
+
+`0012_d9_execution_ownership.sql` 为尝试增加执行器、领取标识、领取/心跳时间、租约和运行配置快照，为不可变的发布发送占用增加期限。迁移只增加结构，不启动、重置或改写旧尝试。升级前必须停止全部旧执行器；旧 running 记录随后由新版后台标为中断失败，旧 queued 记录仍可领取。已有错误、内容与配置保留。配置和验证见 [后台执行验收](../../docs/acceptance/background-execution-ownership.md)。
+
+## D9 第二批：执行控制与预算账本
+
+`0013_d9_execution_limits.sql` 增加执行限制快照、有效执行累计时间、步骤技术重试次数及到期时间，新增任务预算及逐次调用记录。调用身份和终态不可改写，任务预算上限与历史调用次数不可重置。迁移只补结构，旧错误、版本和历史保持不变，不追溯伪造旧调用消耗；升级前需停止全部旧执行器。详见 [第二批验收](../../docs/acceptance/execution-limits.md)。

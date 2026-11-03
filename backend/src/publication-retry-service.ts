@@ -4,6 +4,11 @@ import type { OperationBodies, ResponseModels, Session, TaskDetail } from '@mult
 import type { createBusinessDatabase } from './database.js';
 import { AuthError } from './auth.js';
 import { lockEditorialTeam } from './editorial-state.js';
+import { PublicationService } from './publication-service.js';
+import { PublicationSender } from './publication-sender.js';
+import { publicationPreflight } from './publication-preflight.js';
+import type { SimulationPublicationAdapter } from './publication-sender.js';
+import { manualRetryReason } from './manual-publication-retry.js';
 import { publicationModel } from './publication-model.js';
 import {
   auditEvents,
@@ -26,12 +31,15 @@ export class PublicationRetryService {
     private db: Database,
     private read: (connection: Connection, id: string, actor: Actor) => Promise<TaskDetail>,
     private now: () => Date,
+    private simulationAdapter?: SimulationPublicationAdapter,
   ) {}
   async retry(input: {
     taskId: string;
     operationId: string;
     actor: Actor;
-    body: OperationBodies['retryPublication'];
+    body: Omit<OperationBodies['retryPublication'], 'channel'> & {
+      channel: 'manual' | 'official_api' | 'simulation';
+    };
     key: string;
     requestId: string;
   }): Promise<{ data: ResponseModels['Publication']; replayed: boolean }> {
@@ -71,7 +79,7 @@ export class PublicationRetryService {
       body.reason,
     ]);
     try {
-      return await this.db.transaction(async (tx) => {
+      const result = await this.db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL lock_timeout='5s'`);
         await tx.execute(sql`SET LOCAL statement_timeout='10s'`);
         await tx.execute(
@@ -139,7 +147,7 @@ export class PublicationRetryService {
             'APPROVAL_INVALID',
             '请求与原交接的账号、批准版本或摘要不一致。',
           );
-        if (body.channel !== 'manual')
+        if (body.channel !== 'manual' && !(body.channel === 'simulation' && this.simulationAdapter))
           throw new AuthError(501, 'NOT_IMPLEMENTED', '当前仅支持重新创建人工交接。');
         const finish = async (replayed: boolean) => {
           const [fresh] = await tx
@@ -202,11 +210,22 @@ export class PublicationRetryService {
             '任务、账号或批准已更新，请重新打开确认面板核对。',
           );
         const detail = await this.read(tx, taskId, actor);
-        if (detail.currentPublication?.id !== operationId || !detail.actions.retry_publish.allowed)
+        const retryReason =
+          body.channel === 'simulation'
+            ? manualRetryReason(
+                detail,
+                detail.currentPublication,
+                (await publicationPreflight(tx, detail))?.message ?? null,
+                'simulation',
+              )
+            : detail.actions.retry_publish.allowed
+              ? null
+              : (detail.actions.retry_publish.reason ?? '当前交接不能重试。');
+        if (detail.currentPublication?.id !== operationId || retryReason)
           throw new AuthError(
             task.activePublishOperationId ? 423 : 409,
             task.activePublishOperationId ? 'PUBLICATION_LOCKED' : 'APPROVAL_INVALID',
-            detail.actions.retry_publish.reason ?? '当前交接不具备重新交接资格。',
+            retryReason ?? '当前交接不具备重新交接资格。',
           );
         const [previous] = await tx
           .select()
@@ -217,7 +236,12 @@ export class PublicationRetryService {
               eq(publicationDispatches.id, body.previousDispatchId),
             ),
           );
-        if (!previous || previous.status !== 'failed' || operation.status !== 'failed')
+        if (
+          !previous ||
+          previous.channel !== body.channel ||
+          previous.status !== 'failed' ||
+          operation.status !== 'failed'
+        )
           throw new AuthError(409, 'INVALID_STATE', '仅明确未发布的已结束人工交接可以重试。');
         const id = randomUUID();
         await tx.insert(publicationDispatches).values({
@@ -227,14 +251,18 @@ export class PublicationRetryService {
           previousDispatchId: previous.id,
           reason: body.reason,
           approvalId: operation.snapshot.approval.id,
-          channel: 'manual',
-          status: 'awaiting_manual',
+          channel: body.channel,
+          status: body.channel === 'simulation' ? 'publishing' : 'awaiting_manual',
           startedBy: actor.id,
           startedAt: now,
         });
         await tx
           .update(publicationOperations)
-          .set({ status: 'awaiting_manual', currentDispatchId: id, updatedAt: now })
+          .set({
+            status: body.channel === 'simulation' ? 'publishing' : 'awaiting_manual',
+            currentDispatchId: id,
+            updatedAt: now,
+          })
           .where(eq(publicationOperations.id, operationId));
         await tx
           .update(tasks)
@@ -261,6 +289,23 @@ export class PublicationRetryService {
         });
         return finish(false);
       });
+      if (!result.replayed && body.channel === 'simulation' && this.simulationAdapter) {
+        await new PublicationSender(this.db, this.read, this.now, this.simulationAdapter).send({
+          taskId,
+          operationId,
+          dispatchId: result.data.operation.currentDispatchId,
+          actor,
+        });
+        return {
+          data: await new PublicationService(this.db, this.read, this.now).get({
+            taskId,
+            operationId,
+            actor,
+          }),
+          replayed: false,
+        };
+      }
+      return result;
     } catch (error) {
       if (error instanceof AuthError) throw error;
       throw new AuthError(

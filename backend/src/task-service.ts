@@ -33,8 +33,10 @@ import {
   publicationOperations,
   publicationDispatches,
   publicationVerifications,
+  publicationSendClaims,
 } from './schema.js';
 import { activeAttempt, attemptModel, contentModel } from './execution-model.js';
+import { TaskTerminationService } from './task-termination-service.js';
 import { TaskExecutionService } from './task-execution-service.js';
 import { EditorialService } from './editorial-service.js';
 import type { EditorialRequest } from './editorial-service.js';
@@ -43,6 +45,8 @@ import { manualEntryReason } from './manual-publication-entry.js';
 import { manualRetryReason } from './manual-publication-retry.js';
 import { PublicationRetryService } from './publication-retry-service.js';
 import { PublicationResultService } from './publication-result-service.js';
+import { PublicationSender } from './publication-sender.js';
+import type { SimulationPublicationAdapter } from './publication-sender.js';
 import { PublicationService } from './publication-service.js';
 import { publicationModel } from './publication-model.js';
 import { reviewEligible } from './manual-review.js';
@@ -64,6 +68,7 @@ function taskDetail(
   workflow: {
     publication?: PublishOperation | null;
     publicationStatus?: PublicationStatus | null;
+    publicationSendClaimed?: boolean;
     review?: ReviewCycle | null;
     approval?: Approval | null;
     decision?: ManualDecision | null;
@@ -97,9 +102,9 @@ function taskDetail(
       activePublishOperationId: task.activePublishOperationId,
       publishedOperationId: task.publishedOperationId,
       sourceTaskId: null,
-      terminatedBy: null,
-      terminatedAt: null,
-      terminationReason: null,
+      terminatedBy: task.terminatedBy,
+      terminatedAt: task.terminatedAt?.toISOString() ?? null,
+      terminationReason: task.terminationReason,
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
     },
@@ -121,7 +126,7 @@ function taskDetail(
             ownerType: 'attempt',
             ownerId: attempt.id,
             generation: attempt.generation,
-            cancelRequested: false,
+            cancelRequested: !!attempt.cancelRequestedAt,
           }
         : null,
     account,
@@ -206,6 +211,7 @@ function taskDetail(
     content: detail.currentContent,
     ...workflow,
     working: editingLocked || !!detail.workLock,
+    cancellationRequested: attempt?.cancelScope === 'terminate_task' && !!attempt.cancelRequestedAt,
   });
   const reason =
     entryReason ??
@@ -228,6 +234,21 @@ function taskDetail(
     ] as const)
       detail.actions[action] = { allowed: false, reason: '文案已冻结，请先处理原发布交接。' };
   }
+  const currentDispatch = workflow.publication?.dispatches.find(
+    (d) => d.id === workflow.publication?.currentDispatchId,
+  );
+  const unsentSimulation =
+    workflow.publication?.status === 'publishing' &&
+    currentDispatch?.channel === 'simulation' &&
+    currentDispatch.status === 'publishing' &&
+    workflow.publicationSendClaimed === false;
+  const terminationReason =
+    task.lifecycle !== 'open' || task.publishedOperationId
+      ? '任务已结束，不能再次终止。'
+      : task.activePublishOperationId && !unsentSimulation
+        ? '已有人工交接或可能已发送的操作，请先完成回填或核实。'
+        : null;
+  detail.actions.terminate = { allowed: terminationReason === null, reason: terminationReason };
   detail.actions.backfill = {
     allowed: workflow.publication?.status === 'awaiting_manual',
     reason:
@@ -246,7 +267,12 @@ export class TaskService {
   constructor(
     private db: Database,
     private now: () => Date = () => new Date(),
-    private options: { executorMode?: 'mock' | 'disabled'; stepDelayMs?: number } = {},
+    private options: {
+      executorMode?: 'mock' | 'disabled';
+      stepDelayMs?: number;
+      executionLimits?: import('./execution-config.js').ExecutionLimits;
+      simulationPublicationAdapter?: SimulationPublicationAdapter;
+    } = {},
   ) {}
 
   accountRegistration(input: {
@@ -287,11 +313,20 @@ export class TaskService {
     ).handle(input);
   }
 
+  terminate(input: Parameters<TaskTerminationService['terminate']>[0]) {
+    return new TaskTerminationService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+    ).terminate(input);
+  }
+
   retryPublication(input: Parameters<PublicationRetryService['retry']>[0]) {
     return new PublicationRetryService(
       this.db,
       (connection, id, actor) => this.read(connection, id, actor),
       this.now,
+      this.options.simulationPublicationAdapter,
     ).retry(input);
   }
   publicationResult(input: Parameters<PublicationResultService['record']>[0]) {
@@ -299,6 +334,7 @@ export class TaskService {
       this.db,
       (connection, id, actor) => this.read(connection, id, actor),
       this.now,
+      !!this.options.simulationPublicationAdapter,
     ).record(input);
   }
   private publication() {
@@ -306,7 +342,23 @@ export class TaskService {
       this.db,
       (connection, id, actor) => this.read(connection, id, actor),
       this.now,
+      this.options.simulationPublicationAdapter,
     );
+  }
+  /** Tests inject the adapter in code; no server setting, route or UI enables it. */
+  recoverSimulatedPublication(input: {
+    taskId: string;
+    operationId: string;
+    actor: Session['member'];
+  }) {
+    if (!this.options.simulationPublicationAdapter)
+      throw new AuthError(501, 'NOT_IMPLEMENTED', '模拟发送仅供自动化测试注入。');
+    return new PublicationSender(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+      this.options.simulationPublicationAdapter,
+    ).recover(input);
   }
   publish(input: Parameters<PublicationService['publish']>[0]) {
     return this.publication().publish(input);
@@ -661,6 +713,13 @@ export class TaskService {
             .where(eq(publicationDispatches.operationId, operation.id))
             .orderBy(publicationDispatches.dispatchNo)
         : [];
+      const [sendClaim] =
+        operation?.status === 'publishing'
+          ? await connection
+              .select()
+              .from(publicationSendClaims)
+              .where(eq(publicationSendClaims.dispatchId, operation.currentDispatchId))
+          : [];
       return taskDetail(
         row.task,
         row.account,
@@ -675,6 +734,7 @@ export class TaskService {
                 observations.map((item) => item.data),
               )
             : null,
+          publicationSendClaimed: !!sendClaim,
           review: row.review,
           approval: row.approval,
           configVersion: row.configVersion,

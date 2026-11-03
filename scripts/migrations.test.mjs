@@ -495,7 +495,7 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
   await runAllMigrations(c, 'migrate');
   const { account } = await seed(c);
   const before = (await c.query('SELECT * FROM tasks')).rows;
-  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 8, pending: 0 });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 12, pending: 0 });
   assert.deepEqual(
     (await c.query('SELECT * FROM tasks')).rows,
     before.map((row) => ({
@@ -512,6 +512,9 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
       work_generation: 0,
       active_publish_operation_id: null,
       published_operation_id: null,
+      terminated_by: null,
+      terminated_at: null,
+      termination_reason: null,
     })),
   );
   const [draft] = (
@@ -581,10 +584,10 @@ test('已知人工版本分支与当前任务迁移兼容，保留原历史、�
   ).rows;
   assert.deepEqual(await runLatestMigrations(c, 'status'), {
     applied: 1,
-    pending: 9,
+    pending: 13,
     retainedCompatible: 1,
   });
-  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 9, pending: 0 });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 13, pending: 0 });
   for (const entry of originalHistory)
     assert.equal(
       (
@@ -648,4 +651,112 @@ test('D6登记迁移保留官方授权；人工资格默认关闭，登记人及
   await assert.rejects(c.query('UPDATE accounts SET registered_by=NULL WHERE id=$1', [account]), {
     code: '23514',
   });
+});
+
+test('D7终止记录要求完整元数据且绑定真实成员，兼容未记录原因的历史终止任务', async (t) => {
+  const c = await database(t);
+  await runLatestMigrations(c, 'migrate');
+  const { member } = await seed(c);
+  const id = (await c.query('SELECT id FROM tasks LIMIT 1')).rows[0].id;
+  await assert.rejects(c.query('UPDATE tasks SET terminated_by=$1 WHERE id=$2', [member, id]), {
+    code: '23514',
+  });
+  await c.query("UPDATE tasks SET lifecycle='terminated' WHERE id=$1", [id]);
+  await assert.rejects(
+    c.query(
+      "UPDATE tasks SET terminated_by=$1,terminated_at=now(),termination_reason='  ' WHERE id=$2",
+      [member, id],
+    ),
+    { code: '23514' },
+  );
+  await assert.rejects(
+    c.query(
+      "UPDATE tasks SET terminated_by=gen_random_uuid(),terminated_at=now(),termination_reason='结束任务' WHERE id=$1",
+      [id],
+    ),
+    { code: '23503' },
+  );
+  await c.query(
+    "UPDATE tasks SET terminated_by=$1,terminated_at=now(),termination_reason='用户终止任务' WHERE id=$2",
+    [member, id],
+  );
+  await assert.rejects(c.query("UPDATE tasks SET lifecycle='open' WHERE id=$1", [id]), {
+    code: '23514',
+  });
+  const record = (
+    await c.query('SELECT terminated_by,terminated_at,termination_reason FROM tasks WHERE id=$1', [
+      id,
+    ])
+  ).rows[0];
+  assert.equal(record.terminated_by, member);
+  assert.ok(record.terminated_at instanceof Date);
+  assert.equal(record.termination_reason, '用户终止任务');
+});
+
+test('D9租约增量迁移保留旧运行尝试、错误及配置，不自动执行或重置业务数据', async (t) => {
+  const c = await database(t);
+  const folder = await mkdtemp(join(tmpdir(), 'ops-before-d9-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  await cp(migrationsFolder, folder, { recursive: true });
+  const path = join(folder, 'meta/_journal.json');
+  const journal = JSON.parse(await readFile(path, 'utf8'));
+  journal.entries = journal.entries.filter((entry) => entry.idx < 12);
+  await writeFile(path, JSON.stringify(journal));
+  await runLatestMigrations(c, 'migrate', folder);
+  const { team, member } = await seed(c);
+  const task = (
+    await c.query(
+      "INSERT INTO tasks(title,original_request,team_id,created_by,execution_status,work_generation) VALUES ('旧运行任务','保留原文',$1,$2,'running',1) RETURNING *",
+      [team, member],
+    )
+  ).rows[0];
+  const attempt = (
+    await c.query(
+      "INSERT INTO execution_attempts(task_id,attempt_no,generation,status,simulation_scenario,config_snapshot,requested_by,started_at,error) VALUES ($1,1,1,'running','success',$2,$3,CURRENT_TIMESTAMP,$4) RETURNING *",
+      [
+        task.id,
+        {
+          executorVersion: 1,
+          mode: 'mock',
+          scenario: 'success',
+          originalRequest: task.original_request,
+          referenceInputs: [],
+          inputRevision: 1,
+          stepDelayMs: 1000,
+        },
+        member,
+        { code: 'LEGACY_WARNING', message: '保留旧错误', retryable: false },
+      ],
+    )
+  ).rows[0];
+  await c.query('UPDATE tasks SET current_attempt_id=$2 WHERE id=$1', [task.id, attempt.id]);
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 2, pending: 0 });
+  const upgraded = (await c.query('SELECT * FROM execution_attempts WHERE id=$1', [attempt.id]))
+    .rows[0];
+  for (const [key, value] of Object.entries(attempt)) assert.deepEqual(upgraded[key], value, key);
+  for (const key of [
+    'executor_id',
+    'claim_token',
+    'claimed_at',
+    'heartbeat_at',
+    'lease_expires_at',
+    'runtime_policy',
+  ])
+    assert.equal(upgraded[key], null);
+  const before = await dataFingerprint(c);
+  await assert.rejects(
+    c.query('UPDATE execution_attempts SET executor_id=gen_random_uuid() WHERE id=$1', [
+      attempt.id,
+    ]),
+    { code: '23514' },
+  );
+  await assert.rejects(
+    c.query(
+      'UPDATE execution_attempts SET claim_token=gen_random_uuid(),claimed_at=CURRENT_TIMESTAMP,heartbeat_at=CURRENT_TIMESTAMP WHERE id=$1',
+      [attempt.id],
+    ),
+    { code: '23514' },
+  );
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 0, pending: 0 });
+  assert.deepEqual(await dataFingerprint(c), before);
 });

@@ -19,6 +19,8 @@ import type {
   TaskSummary,
   AgentStep,
   ExecutionAttempt,
+  ExecutionCall,
+  ExecutionBudget,
   ClarificationAnswer,
 } from './domain.js';
 import type { ApiError, Page, SaveContentResult } from './api.js';
@@ -70,6 +72,8 @@ export interface ResponseModels {
   BlindScore: { id: string; itemId: string; submittedAt: string };
   History: {
     attempts: ExecutionAttempt[];
+    calls?: ExecutionCall[];
+    budget?: ExecutionBudget | null;
     steps: AgentStep[];
     clarificationAnswers: ClarificationAnswer[];
     audit: Page<AuditEvent>;

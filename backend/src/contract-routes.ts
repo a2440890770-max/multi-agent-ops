@@ -24,6 +24,7 @@ export function registerContractRoutes(
     | 'start'
     | 'retry'
     | 'stop'
+    | 'terminate'
     | 'history'
     | 'clarify'
     | 'editorial'
@@ -165,6 +166,22 @@ export function registerContractRoutes(
                     query: request.query as OperationQueries['listPublications'],
                   });
             return { data, meta: { requestId: request.id, replayed: false } };
+          }
+          if (endpoint.operationId === 'terminateTask') {
+            if (!tasks)
+              throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '任务终止服务尚未配置。');
+            if (!request.authSession) throw new AuthError(401, 'UNAUTHENTICATED', '请重新登录。');
+            const result = await tasks.terminate({
+              taskId: (request.params as OperationParams['terminateTask']).taskId,
+              actor: request.authSession.member,
+              body: request.body as OperationBodies['terminateTask'],
+              key: request.headers['idempotency-key'] as string,
+              requestId: request.id,
+            });
+            return reply.code(202).send({
+              data: result.data,
+              meta: { requestId: request.id, replayed: result.replayed },
+            });
           }
           if (editorialOperations.has(endpoint.operationId)) {
             if (!tasks)

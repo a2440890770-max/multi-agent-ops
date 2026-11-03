@@ -33,6 +33,7 @@ export class PublicationResultService {
     private db: Database,
     private read: (connection: Connection, id: string, actor: Actor) => Promise<TaskDetail>,
     private now: () => Date,
+    private simulationEnabled = false,
   ) {}
   async record(input: {
     taskId: string;
@@ -209,11 +210,24 @@ export class PublicationResultService {
               eq(publicationDispatches.id, body.dispatchId),
             ),
           );
-        if (!dispatch || dispatch.channel !== 'manual')
+        if (
+          !dispatch ||
+          (dispatch.channel !== 'manual' &&
+            !(this.simulationEnabled && dispatch.channel === 'simulation'))
+        )
           throw new AuthError(409, 'INVALID_STATE', '本接口仅支持当前人工交接。');
         const published = operation.status === 'published';
+        const confirmingSimulationFailure =
+          this.simulationEnabled &&
+          dispatch.channel === 'simulation' &&
+          operation.status === 'failed' &&
+          input.kind === 'verification' &&
+          body.conclusion === 'not_published' &&
+          body.manualConfirmed &&
+          body.previousDispatchFenced;
         if (
           !published &&
+          !confirmingSimulationFailure &&
           operation.status !==
             (input.kind === 'backfill' ? 'awaiting_manual' : 'verification_required')
         )
@@ -225,7 +239,9 @@ export class PublicationResultService {
         if (
           (published && task.publishedOperationId !== operationId) ||
           (!published &&
-            (task.activePublishOperationId !== operationId ||
+            ((confirmingSimulationFailure
+              ? task.activePublishOperationId !== null
+              : task.activePublishOperationId !== operationId) ||
               task.lifecycle !== 'open' ||
               task.currentContentVersionId !== operation.contentVersionId))
         )
