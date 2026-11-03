@@ -94,7 +94,7 @@ export function validDetail(value: unknown): value is TaskDetail {
     object(value) &&
     nullableText(value.errorMessage) &&
     object(value.actions) &&
-    ['start', 'retry', 'stop'].every(
+    ['start', 'retry', 'stop', 'terminate'].every(
       (key) =>
         object(value.actions) &&
         object(value.actions[key]) &&
@@ -308,4 +308,17 @@ export async function getTaskHistory(taskId: string, signal: AbortSignal) {
       nullableText(value.audit.nextCursor),
   );
   return result.data;
+}
+
+export function terminateTask(
+  taskId: string,
+  body: OperationBodies['terminateTask'],
+  csrf: string,
+  key: string,
+) {
+  return request(
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/terminate`,
+    { body, csrf, key, successStatus: 202 },
+    validDetail,
+  );
 }

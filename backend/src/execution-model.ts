@@ -32,6 +32,11 @@ export function attemptModel(row: typeof executionAttempts.$inferSelect): Execut
     stoppedAt: row.stoppedAt?.toISOString() ?? null,
     error: row.error,
     traceUrl: null,
+    control: {
+      limits: row.executionLimits,
+      activeElapsedMs: row.activeElapsedMs,
+      activeSince: row.activeSince?.toISOString() ?? null,
+    },
   };
 }
 
@@ -66,6 +71,12 @@ export function stepModel(row: typeof executionSteps.$inferSelect, outputId?: st
     sourceRefs: [],
     usedMemoryRefs: [],
     durationMs: row.durationMs,
+    execution: {
+      startedAt: row.startedAt?.toISOString() ?? null,
+      finishedAt: row.finishedAt?.toISOString() ?? null,
+      retryCount: row.retryCount,
+      nextRetryAt: row.nextCallAt?.toISOString() ?? null,
+    },
     error: row.error,
     traceUrl: null,
   };

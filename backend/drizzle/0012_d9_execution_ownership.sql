@@ -1,0 +1,9 @@
+ALTER TABLE "execution_attempts" ADD COLUMN "executor_id" uuid;--> statement-breakpoint
+ALTER TABLE "execution_attempts" ADD COLUMN "claim_token" uuid;--> statement-breakpoint
+ALTER TABLE "execution_attempts" ADD COLUMN "claimed_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "execution_attempts" ADD COLUMN "heartbeat_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "execution_attempts" ADD COLUMN "lease_expires_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "execution_attempts" ADD COLUMN "runtime_policy" jsonb;--> statement-breakpoint
+ALTER TABLE "task_publication_send_claims" ADD COLUMN "expires_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "execution_attempts_lease_idx" ON "execution_attempts" USING btree ("lease_expires_at") WHERE "execution_attempts"."status" = 'running';--> statement-breakpoint
+ALTER TABLE "execution_attempts" ADD CONSTRAINT "execution_attempts_lease_check" CHECK (("execution_attempts"."executor_id" IS NULL AND "execution_attempts"."claim_token" IS NULL AND "execution_attempts"."claimed_at" IS NULL AND "execution_attempts"."heartbeat_at" IS NULL AND "execution_attempts"."lease_expires_at" IS NULL) OR ("execution_attempts"."executor_id" IS NOT NULL AND "execution_attempts"."claim_token" IS NOT NULL AND "execution_attempts"."claimed_at" IS NOT NULL AND "execution_attempts"."heartbeat_at" IS NOT NULL AND "execution_attempts"."lease_expires_at" IS NOT NULL AND "execution_attempts"."lease_expires_at" >= "execution_attempts"."heartbeat_at" AND "execution_attempts"."heartbeat_at" >= "execution_attempts"."claimed_at"));

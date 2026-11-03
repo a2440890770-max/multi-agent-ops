@@ -5,6 +5,8 @@ import { Empty, Notice } from '../components.js';
 import { getTaskHistory, runTaskCommand, TaskRequestError } from '../task-api.js';
 import type { ExecutionCommand } from '../task-api.js';
 import { executionLabels } from '../task-labels.js';
+import { durationLabel, elapsed } from '../execution-display.js';
+import { AttemptTimes, ExecutionFailure, useExecutionClock } from './TaskExecutionProgress.js';
 
 type Scenario = 'success' | 'failure' | 'clarification';
 type Pending = { key: string; command: ExecutionCommand };
@@ -233,6 +235,9 @@ export function TaskExecutionControls({
       <Notice>
         当前用于验证任务流程，不调用真实模型、搜索或微博发布。模拟产出不具备审核或发布资格。
       </Notice>
+      <p className="muted">
+        “停止本次执行”只结束当前尝试，保留任务并允许人工重新执行；“终止任务”还会阻止后续生成和发布。
+      </p>
       {error && <Notice tone="danger">{error}</Notice>}
       {notice && <Notice tone="success">{notice}</Notice>}
       {pending && (
@@ -311,23 +316,36 @@ export function TaskExecutionHistory({ taskId, revision }: { taskId: string; rev
   const [history, setHistory] = useState<ResponseModels['History'] | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const active =
+    history?.attempts.some((attempt) => ['queued', 'running'].includes(attempt.status)) ?? false;
+  const now = useExecutionClock(active);
   useEffect(() => {
     const controller = new AbortController();
+    let timer: number | undefined;
     setError('');
     void getTaskHistory(taskId, controller.signal)
       .then((value) => {
-        if (!controller.signal.aborted) setHistory(value);
+        if (controller.signal.aborted) return;
+        setHistory(value);
+        if (value.attempts.some((attempt) => ['queued', 'running'].includes(attempt.status)))
+          timer = window.setTimeout(() => setRetry((value) => value + 1), 1500);
       })
       .catch((failure: unknown) => {
         if (controller.signal.aborted) return;
         setError(failure instanceof Error ? failure.message : '执行记录加载失败。');
         if (failure instanceof TaskRequestError && failure.status === 401) void refresh();
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (timer) window.clearTimeout(timer);
+    };
   }, [taskId, revision, retry, refresh]);
   return (
     <section className="panel detail-panel" aria-labelledby="execution-history-title">
       <h2 id="execution-history-title">执行尝试记录</h2>
+      <p className="muted">
+        人工重新执行会新增尝试；技术重试保留在原尝试和步骤内。旧失败与调用记录会继续保留。
+      </p>
       {error && (
         <>
           <Notice tone="danger">{error}</Notice>
@@ -366,8 +384,14 @@ export function TaskExecutionHistory({ taskId, revision }: { taskId: string; rev
             <dt>当前步骤</dt>
             <dd>{attempt.currentStep ?? '—'}</dd>
           </dl>
-          {attempt.error && <Notice tone="danger">{attempt.error.message}</Notice>}
-          {attempt.cancelReason && <p>停止原因：{attempt.cancelReason}</p>}
+          <AttemptTimes attempt={attempt} now={now} />
+          {attempt.error && <ExecutionFailure failure={attempt.error} guidance={false} />}
+          {attempt.cancelReason && (
+            <p>
+              {attempt.cancelScope === 'terminate_task' ? '任务终止原因' : '本次停止原因'}：
+              {attempt.cancelReason}
+            </p>
+          )}
           {history.clarificationAnswers
             .filter((answer) => answer.attemptId === attempt.id)
             .map((answer) => (
@@ -386,10 +410,69 @@ export function TaskExecutionHistory({ taskId, revision }: { taskId: string; rev
                 <li key={step.id}>
                   <strong>{roles[step.role]}</strong>
                   <span>
-                    {stepStatus[step.status]}
-                    {step.durationMs !== null ? ` · ${step.durationMs} ms` : ''}
+                    {step.status === 'running' && step.execution?.nextRetryAt
+                      ? '等待技术重试'
+                      : stepStatus[step.status]}
+                    {' · 耗时：'}
+                    {durationLabel(
+                      step.durationMs ??
+                        (step.status === 'running' && step.execution?.startedAt
+                          ? elapsed(step.execution.startedAt, now)
+                          : null),
+                    )}
                   </span>
+                  {!!step.execution?.retryCount && (
+                    <p>已安排技术重试 {step.execution.retryCount} 次</p>
+                  )}
+                  {step.status === 'running' && step.execution?.nextRetryAt && (
+                    <p>
+                      预计重试时间：{date(step.execution.nextRetryAt)}；剩余等待{' '}
+                      {durationLabel(
+                        elapsed(new Date(now).toISOString(), step.execution.nextRetryAt),
+                      )}
+                      ，实际由后台调度。
+                    </p>
+                  )}
                   {step.error && <p>{step.error.message}</p>}
+                  {history.calls && (
+                    <details className="execution-calls">
+                      <summary>
+                        调用及失败历史（
+                        {history.calls.filter((call) => call.stepId === step.id).length} 条）
+                      </summary>
+                      <ol>
+                        {history.calls
+                          .filter((call) => call.stepId === step.id)
+                          .map((call) => (
+                            <li key={call.id}>
+                              <strong>
+                                {call.retryNo ? `技术重试第 ${call.retryNo} 次` : '首次调用'}
+                              </strong>
+                              <span>
+                                {
+                                  {
+                                    running: '执行中',
+                                    succeeded: '成功',
+                                    failed: '失败',
+                                    timed_out: '超时',
+                                    interrupted: '已中断',
+                                  }[call.status]
+                                }{' '}
+                                · 耗时：
+                                {durationLabel(elapsed(call.startedAt, call.finishedAt ?? now))}
+                              </span>
+                              <small>{date(call.startedAt)}</small>
+                              {call.error && (
+                                <ExecutionFailure failure={call.error} guidance={false} />
+                              )}
+                            </li>
+                          ))}
+                      </ol>
+                      {!history.calls.some((call) => call.stepId === step.id) && (
+                        <p className="muted">暂无调用记录；旧版本执行可能未记录调用明细。</p>
+                      )}
+                    </details>
+                  )}
                 </li>
               ))}
           </ol>

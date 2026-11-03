@@ -1,3 +1,5 @@
+import { readExecutionLimits } from '../backend/src/execution-config.ts';
+import { TechnicalStepError } from '../backend/src/execution-control.ts';
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -325,7 +327,7 @@ test('创建遵循已有 201 契约，原文、创建人、团队、固定账号
   assert.equal(data.actions.save.allowed, true);
   assert.ok(
     Object.entries(data.actions)
-      .filter(([name]) => !['start', 'save'].includes(name))
+      .filter(([name]) => !['start', 'save', 'terminate'].includes(name))
       .every(([, a]) => !a.allowed && a.reason),
   );
   const row = (await client.query('SELECT * FROM tasks WHERE id=$1', [data.task.id])).rows[0];
@@ -865,7 +867,7 @@ test('详情投影持久化执行状态和错误，兼容原型 needs_human 状�
     );
     assert.ok(
       Object.entries(response.json().data.actions)
-        .filter(([name]) => !['start', 'save'].includes(name))
+        .filter(([name]) => !['start', 'save', 'terminate'].includes(name))
         .every(([, action]) => !action.allowed),
     );
   }
@@ -957,7 +959,9 @@ function execute(identity, taskId, kind, payload, options = {}) {
       ? 'attempts'
       : kind === 'retry'
         ? 'attempt-retries'
-        : `attempts/${options.attemptId}/stop`;
+        : kind === 'clarify'
+          ? 'clarifications'
+          : `attempts/${options.attemptId}/stop`;
   return (options.target ?? app).inject({
     method: 'POST',
     url: `/api/v1/tasks/${taskId}/${path}`,
@@ -1067,17 +1071,16 @@ test('并发启动、同键重放与服务重建只产生一次尝试；不同�
   );
 });
 
-test('模拟成功逐步推进；刷新、执行器重建和双工作进程不会重复产出或覆盖旧步骤', async () => {
+test('模拟成功逐步推进；双执行器不能推进同一有效租约或重复产出', async () => {
   const identity = await login();
   const id = (await create(identity)).json().data.task.id;
   await execute(identity, id, 'start', { expectedRevision: 1 });
-  let worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+  const worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
   assert.equal(await worker.tick(), false);
   await advance(worker);
   const running = (await detail(identity, id)).json().data;
   assert.equal(running.execution, 'running');
   assert.ok(running.currentAttempt.startedAt);
-  worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
   for (let i = 0; i < 4; i++) {
     now = new Date(now.getTime() + 1000);
     const another = new MockTaskExecutor(database.db, { now: () => new Date(now) });
@@ -1285,8 +1288,14 @@ test('历史审计分页稳定完整，游标只用于当前团队任务的审�
     ids.push(...data.audit.items.map((e) => e.id));
     cursor = data.audit.nextCursor;
   } while (cursor && ids.length < 20);
-  assert.equal(ids.length, 7);
-  assert.equal(new Set(ids).size, 7);
+  const expected = (
+    await client.query(
+      'SELECT id FROM audit_events WHERE task_id=$1 ORDER BY created_at DESC,id DESC',
+      [id],
+    )
+  ).rows.map((r) => r.id);
+  assert.deepEqual(ids, expected);
+  assert.equal(new Set(ids).size, expected.length);
   assert.equal((await history(identity, id, { cursor: 'bad' })).statusCode, 400);
   const next = (await history(identity, id, { limit: '1' })).json().data.audit.nextCursor;
   const otherId = (await create(identity)).json().data.task.id;
@@ -1353,10 +1362,22 @@ test('执行命令和工作步骤的审计失败均整笔回滚，恢复后原�
   }
 });
 
-test('模拟工作进程被强制中断后，新进程从数据库检查点恢复并只完成一次', async () => {
+test('执行进程被强制中断后，新进程标失败，人工重试创建新尝试并保留旧错误', async () => {
   const identity = await login();
   const id = (await create(identity)).json().data.task.id;
-  await execute(identity, id, 'start', { expectedRevision: 1 });
+  const saved = await app.inject({
+    method: 'POST',
+    url: `/api/v1/tasks/${id}/content-versions`,
+    headers: { origin, ...identity, 'idempotency-key': randomUUID() },
+    payload: {
+      expectedRevision: 1,
+      baseContentVersionId: null,
+      body: '进程中断及人工重试前的旧版本，必须保留。',
+    },
+  });
+  assert.equal(saved.statusCode, 201, saved.body);
+  const previousContent = saved.json().data.task.currentContent;
+  await execute(identity, id, 'start', { expectedRevision: saved.json().data.task.task.revision });
   await client.query(
     'UPDATE execution_attempts SET next_run_at=CURRENT_TIMESTAMP WHERE task_id=$1',
     [id],
@@ -1394,34 +1415,78 @@ test('模拟工作进程被强制中断后，新进程从数据库检查点恢�
   try {
     const first = await spawnWorker();
     await waitStatus('running');
+    const generationDeadline = Date.now() + 12000;
+    while (true) {
+      const step = (
+        await client.query(
+          "SELECT role FROM execution_steps WHERE attempt_id=(SELECT current_attempt_id FROM tasks WHERE id=$1) AND status='running'",
+          [id],
+        )
+      ).rows[0];
+      if (step?.role === 'content') break;
+      assert.ok(Date.now() < generationDeadline, 'worker did not reach generation');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     const exited = once(first, 'exit');
     first.kill('SIGKILL');
     await exited;
     const checkpoint = (await client.query("SELECT * FROM execution_steps WHERE status='running'"))
       .rows[0];
-    assert.equal(checkpoint.role, 'supervisor');
+    assert.equal(checkpoint.role, 'content');
     await spawnWorker();
-    await waitStatus('ready');
+    await waitStatus('failed');
+    const failed = (await detail(identity, id)).json().data;
+    assert.equal(failed.currentAttempt.error.code, 'EXECUTION_INTERRUPTED');
+    assert.equal(failed.workLock, null);
+    // Starting a new attempt clears the current-content projection; preservation
+    // means the old immutable version is still in history, not promoted as new output.
+    const oldVersion = (
+      await client.query('SELECT body,content_hash FROM task_contents WHERE id=$1', [
+        previousContent.id,
+      ])
+    ).rows[0];
+    assert.equal(oldVersion.body, previousContent.body);
+    assert.equal(oldVersion.content_hash, previousContent.contentHash);
     const firstStep = (
       await client.query('SELECT * FROM execution_steps WHERE id=$1', [checkpoint.id])
     ).rows[0];
-    assert.equal(firstStep.status, 'completed');
+    assert.equal(firstStep.status, 'failed');
     assert.deepEqual(firstStep.started_at, checkpoint.started_at);
     assert.equal(
       (await client.query('SELECT count(*)::int AS n FROM task_contents WHERE task_id=$1', [id]))
         .rows[0].n,
       1,
     );
+    const retry = await execute(identity, id, 'retry', {
+      expectedRevision: failed.task.revision,
+      previousAttemptId: failed.currentAttempt.id,
+      restartTerminated: false,
+      reason: '确认旧执行中断，人工从头重试',
+    });
+    assert.equal(retry.statusCode, 202, retry.body);
+    assert.notEqual(retry.json().data.currentAttempt.id, failed.currentAttempt.id);
+    await waitStatus('ready');
+    const records = (await history(identity, id)).json().data;
+    assert.equal(records.attempts.length, 2);
+    const old = records.attempts.find((a) => a.id === failed.currentAttempt.id);
+    assert.equal(old.status, 'failed');
+    assert.equal(old.error.code, 'EXECUTION_INTERRUPTED');
     assert.equal(
-      (
-        await client.query(
-          "SELECT count(*)::int AS n FROM audit_events WHERE task_id=$1 AND action='attempt.ready'",
-          [id],
-        )
-      ).rows[0].n,
-      1,
+      (await client.query('SELECT count(*)::int AS n FROM task_contents WHERE task_id=$1', [id]))
+        .rows[0].n,
+      2,
     );
-    assert.equal((await history(identity, id)).json().data.attempts.length, 1);
+    const retainedContent = (
+      await client.query('SELECT body,content_hash FROM task_contents WHERE id=$1', [
+        previousContent.id,
+      ])
+    ).rows[0];
+    assert.equal(retainedContent.body, previousContent.body);
+    assert.equal(retainedContent.content_hash, previousContent.contentHash);
+    assert.equal(
+      (await detail(identity, id)).json().data.currentContent.parentVersionId,
+      previousContent.id,
+    );
   } finally {
     for (const child of children)
       if (child.exitCode === null && child.signalCode === null) {
@@ -1716,4 +1781,921 @@ test('澄清审计失败回滚答复与排队状态，恢复后原动作键可�
     await client.query('DROP FUNCTION clarification_audit_failure()');
   }
   assert.equal((await clarify(identity, data, { key })).statusCode, 202);
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+test('心跳延长持有者租约；其他执行器不误伤存活工作，过期租约不能续租或接管', async () => {
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  await execute(identity, id, 'start', { expectedRevision: 1 });
+  const worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+  await advance(worker);
+  const claim = (await client.query('SELECT * FROM execution_attempts WHERE task_id=$1', [id]))
+    .rows[0];
+  assert.equal(claim.executor_id, worker.executorId);
+  assert.ok(claim.claim_token);
+  assert.deepEqual(claim.runtime_policy, worker.policy);
+  now = new Date(now.getTime() + 10000);
+  assert.equal(await worker.heartbeat(), 1);
+  now = new Date(now.getTime() + 21000);
+  const other = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+  assert.equal(await other.tick(), false);
+  assert.equal((await detail(identity, id)).json().data.execution, 'running');
+  now = new Date(now.getTime() + 10000);
+  assert.equal(await worker.heartbeat(), 0);
+  assert.equal(await other.tick(), true);
+  const failed = (await detail(identity, id)).json().data;
+  assert.equal(failed.execution, 'failed');
+  assert.equal(failed.currentAttempt.error.code, 'EXECUTION_INTERRUPTED');
+  assert.equal(await worker.tick(), false);
+  assert.equal(await other.tick(), false);
+  const records = (await history(identity, id)).json().data;
+  assert.equal(
+    records.audit.items.filter((event) => event.action === 'attempt.interrupted').length,
+    1,
+  );
+});
+
+test('在途步骤不持有数据库锁；租约失效及人工重试后，旧执行器迟到结果不可写入新尝试', async () => {
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  await execute(identity, id, 'start', { expectedRevision: 1 });
+  const entered = deferred(),
+    finish = deferred();
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    runStep: async () => {
+      entered.resolve();
+      await finish.promise;
+    },
+  });
+  await advance(worker);
+  now = new Date(now.getTime() + 1000);
+  const pending = worker.tick();
+  try {
+    await entered.promise;
+    await client.query('BEGIN');
+    try {
+      await client.query('SELECT id FROM tasks WHERE id=$1 FOR UPDATE NOWAIT', [id]);
+    } finally {
+      await client.query('ROLLBACK');
+    }
+    now = new Date(now.getTime() + 31000);
+    const other = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+    assert.equal(await other.tick(), true);
+    const failed = (await detail(identity, id)).json().data;
+    const retry = await execute(identity, id, 'retry', {
+      expectedRevision: failed.task.revision,
+      previousAttemptId: failed.currentAttempt.id,
+      restartTerminated: false,
+      reason: '已隔离旧执行，重新执行',
+    });
+    assert.equal(retry.statusCode, 202, retry.body);
+    await advance(other);
+    const before = (await detail(identity, id)).json().data;
+    finish.resolve();
+    assert.equal(await pending, false);
+    assert.deepEqual((await detail(identity, id)).json().data, before);
+    assert.equal(await worker.heartbeat(), 0);
+    await advance(other, 4);
+    const records = (await history(identity, id)).json().data;
+    assert.equal(records.attempts.length, 2);
+    assert.equal(
+      (await client.query('SELECT count(*)::int AS n FROM task_contents WHERE task_id=$1', [id]))
+        .rows[0].n,
+      1,
+    );
+    assert.equal(
+      records.attempts.find((a) => a.id === failed.currentAttempt.id).error.code,
+      'EXECUTION_INTERRUPTED',
+    );
+  } finally {
+    finish.resolve();
+    await pending;
+  }
+});
+
+for (const concurrency of [1, 2]) {
+  test(`执行器并发上限 ${concurrency} 约束数据库领取和实际在途调用`, async () => {
+    const identity = await login();
+    const ids = [];
+    for (let i = 0; i < 2; i++) {
+      const id = (await create(identity)).json().data.task.id;
+      ids.push(id);
+      await execute(identity, id, 'start', { expectedRevision: 1 });
+    }
+    const finish = deferred(),
+      entered = deferred();
+    let active = 0,
+      maxActive = 0;
+    const worker = new MockTaskExecutor(database.db, {
+      concurrency,
+      now: () => new Date(now),
+      runStep: async () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        if (active === concurrency) entered.resolve();
+        await finish.promise;
+        active--;
+      },
+    });
+    now = new Date(now.getTime() + 1000);
+    await Promise.all(Array.from({ length: concurrency }, () => worker.tick()));
+    assert.equal(
+      (
+        await client.query(
+          "SELECT count(*)::int AS n FROM execution_attempts WHERE status='running'",
+        )
+      ).rows[0].n,
+      concurrency,
+    );
+    now = new Date(now.getTime() + 1000);
+    const pending = Array.from({ length: concurrency }, () => worker.tick());
+    try {
+      await entered.promise;
+      assert.equal(await worker.tick(), false);
+      assert.equal(maxActive, concurrency);
+      const statuses = (
+        await client.query('SELECT status FROM execution_attempts ORDER BY attempt_no')
+      ).rows.map((r) => r.status);
+      assert.equal(statuses.filter((s) => s === 'queued').length, 2 - concurrency);
+    } finally {
+      finish.resolve();
+      await Promise.all(pending);
+    }
+  });
+}
+
+test('步骤适配器失败明确终结尝试，不自动再次调用且保留脱敏错误', async () => {
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  await execute(identity, id, 'start', { expectedRevision: 1 });
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    runStep: async () => {
+      calls++;
+      throw new Error('private-provider-payload');
+    },
+  });
+  await advance(worker, 2);
+  const failed = (await detail(identity, id)).json().data;
+  assert.equal(failed.execution, 'failed');
+  assert.equal(failed.currentAttempt.error.code, 'EXECUTION_STEP_FAILED');
+  assert.equal(JSON.stringify(failed).includes('private-provider-payload'), false);
+  assert.equal(await worker.tick(), false);
+  assert.equal(calls, 1);
+});
+
+for (const invalid of ['cancelled', 'terminated', 'generation', 'not-due']) {
+  test(`排队尝试领取前重新检查 ${invalid} 条件`, async () => {
+    const identity = await login();
+    const id = (await create(identity)).json().data.task.id;
+    await execute(identity, id, 'start', { expectedRevision: 1 });
+    now = new Date(now.getTime() + 1000);
+    if (invalid === 'cancelled')
+      await client.query('UPDATE execution_attempts SET cancel_requested_at=$2 WHERE task_id=$1', [
+        id,
+        now,
+      ]);
+    if (invalid === 'terminated')
+      await client.query("UPDATE tasks SET lifecycle='terminated' WHERE id=$1", [id]);
+    if (invalid === 'generation')
+      await client.query('UPDATE tasks SET work_generation=work_generation+1 WHERE id=$1', [id]);
+    if (invalid === 'not-due')
+      await client.query('UPDATE execution_attempts SET next_run_at=$2 WHERE task_id=$1', [
+        id,
+        new Date(now.getTime() + 1000),
+      ]);
+    assert.equal(
+      await new MockTaskExecutor(database.db, { now: () => new Date(now) }).tick(),
+      false,
+    );
+    const row = (await client.query('SELECT * FROM execution_attempts WHERE task_id=$1', [id]))
+      .rows[0];
+    assert.equal(row.status, 'queued');
+    assert.equal(row.claim_token, null);
+  });
+}
+
+test('两个执行器同时领取同一排队尝试，只提交一个领取标识与一次开始事件', async () => {
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  await execute(identity, id, 'start', { expectedRevision: 1 });
+  now = new Date(now.getTime() + 1000);
+  const workers = [
+    new MockTaskExecutor(database.db, { now: () => new Date(now) }),
+    new MockTaskExecutor(database.db, { now: () => new Date(now) }),
+  ];
+  const result = await Promise.all(workers.map((worker) => worker.tick()));
+  assert.equal(result.filter(Boolean).length, 1);
+  const row = (await client.query('SELECT * FROM execution_attempts WHERE task_id=$1', [id]))
+    .rows[0];
+  assert.ok(workers.some((worker) => worker.executorId === row.executor_id));
+  assert.ok(row.claim_token);
+  assert.equal(
+    (
+      await client.query(
+        "SELECT count(*)::int AS n FROM audit_events WHERE task_id=$1 AND action='attempt.claimed'",
+        [id],
+      )
+    ).rows[0].n,
+    1,
+  );
+  assert.equal(
+    (
+      await client.query(
+        "SELECT count(*)::int AS n FROM audit_events WHERE task_id=$1 AND action='attempt.running'",
+        [id],
+      )
+    ).rows[0].n,
+    1,
+  );
+});
+
+test('等待慢步骤时心跳独立续租，其他执行器的启动扫描不会误判中断', { timeout: 10000 }, async () => {
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  await execute(identity, id, 'start', { expectedRevision: 1 });
+  await client.query(
+    'UPDATE execution_attempts SET next_run_at=CURRENT_TIMESTAMP WHERE task_id=$1',
+    [id],
+  );
+  const entered = deferred(),
+    finish = deferred();
+  const worker = new MockTaskExecutor(database.db, {
+    pollMs: 10,
+    heartbeatMs: 50,
+    leaseMs: 200,
+    runStep: async () => {
+      entered.resolve();
+      await finish.promise;
+    },
+  });
+  worker.start();
+  try {
+    await entered.promise;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const other = new MockTaskExecutor(database.db);
+    assert.equal(await other.tick(), false);
+    const row = (await client.query('SELECT * FROM execution_attempts WHERE task_id=$1', [id]))
+      .rows[0];
+    assert.equal(row.status, 'running');
+    assert.ok(row.heartbeat_at > row.claimed_at);
+    assert.ok(row.lease_expires_at > new Date());
+  } finally {
+    // Graceful shutdown must finish even if the adapter ignores its abort signal.
+    const stopped = worker.stop();
+    let timer;
+    try {
+      await Promise.race([
+        stopped,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('shutdown waited for an uncooperative adapter')),
+            3000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      finish.resolve();
+      await stopped;
+    }
+  }
+  assert.equal((await detail(identity, id)).json().data.execution, 'failed');
+});
+
+test('步骤已调用但结果事务失败时停止续租，不能自动重调同一步骤', async () => {
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  await execute(identity, id, 'start', { expectedRevision: 1 });
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    runStep: async () => {
+      calls++;
+    },
+  });
+  await advance(worker);
+  await client.query(
+    "CREATE FUNCTION d9_result_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='attempt.step_advanced' THEN RAISE EXCEPTION 'result-write-failed'; END IF; RETURN NEW; END $$",
+  );
+  await client.query(
+    'CREATE TRIGGER d9_result_failure BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION d9_result_failure()',
+  );
+  try {
+    now = new Date(now.getTime() + 1000);
+    await assert.rejects(worker.tick());
+    assert.equal(calls, 1);
+  } finally {
+    await client.query('DROP TRIGGER d9_result_failure ON audit_events');
+    await client.query('DROP FUNCTION d9_result_failure()');
+  }
+  assert.equal(await worker.tick(), false);
+  assert.equal(await worker.heartbeat(), 0);
+  assert.equal(calls, 1);
+  now = new Date(now.getTime() + 31000);
+  assert.equal(await worker.tick(), true);
+  assert.equal(
+    (await detail(identity, id)).json().data.currentAttempt.error.code,
+    'EXECUTION_INTERRUPTED',
+  );
+});
+
+test('启动扫描识别旧版无租约运行记录，不误启动原步骤', async () => {
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  await execute(identity, id, 'start', { expectedRevision: 1 });
+  await client.query(
+    "UPDATE execution_attempts SET status='running',started_at=CURRENT_TIMESTAMP WHERE task_id=$1",
+    [id],
+  );
+  await client.query(
+    "UPDATE execution_steps SET status='running',started_at=CURRENT_TIMESTAMP WHERE ordinal=0",
+  );
+  await client.query("UPDATE tasks SET execution_status='running' WHERE id=$1", [id]);
+  const worker = new MockTaskExecutor(database.db, {
+    enabled: false,
+    now: () => new Date(now),
+    runStep: async () => assert.fail('legacy work must not be resumed'),
+  });
+  assert.equal(await worker.tick(), true);
+  const d = (await detail(identity, id)).json().data;
+  assert.equal(d.execution, 'failed');
+  assert.equal(d.currentAttempt.error.code, 'EXECUTION_INTERRUPTED');
+  assert.equal(d.workLock, null);
+  assert.equal(await worker.tick(), false);
+});
+
+async function controlledTask(overrides = {}, scenario = 'success') {
+  await app.close();
+  const limits = {
+    ...readExecutionLimits({}),
+    callTimeoutMs: 100,
+    stepTimeoutMs: 1000,
+    attemptTimeoutMs: 5000,
+    retryBaseMs: 10,
+    ...overrides,
+  };
+  app = application({
+    tasks: new TaskService(database.db, () => new Date(now), {
+      stepDelayMs: 1,
+      executionLimits: limits,
+    }),
+  });
+  const identity = await login();
+  const id = (await create(identity)).json().data.task.id;
+  const started = await execute(identity, id, 'start', {
+    expectedRevision: 1,
+    simulationScenario: scenario,
+  });
+  assert.equal(started.statusCode, 202, started.body);
+  return { identity, id, limits };
+}
+async function controlTick(worker, milliseconds = 1) {
+  now = new Date(now.getTime() + milliseconds);
+  return worker.tick();
+}
+const chargedReservation = {
+  kind: 'readonly',
+  maxTokens: 10,
+  maxCostMicrosCny: 100,
+  pricingRef: 'synthetic-cny-v1',
+};
+
+test('技术重试保留同一步骤和原尝试，按退避时间领取；失败预占及已知用量只结算一次', async () => {
+  const { identity, id } = await controlledTask();
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation: chargedReservation,
+    runStep: async () => {
+      if (++calls === 1) throw new TechnicalStepError('RATE_LIMITED');
+      return { usage: { tokens: 4, estimatedCostMicrosCny: 40 } };
+    },
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  assert.equal(calls, 1);
+  assert.equal(await controlTick(worker, 9), false);
+  assert.equal(calls, 1);
+  assert.equal(await controlTick(worker, 1), true);
+  const h = (await history(identity, id)).json().data;
+  assert.equal(h.attempts.length, 1);
+  assert.equal(h.attempts[0].autoRevisionCount, 0);
+  assert.deepEqual(
+    h.calls.map((c) => [c.callNo, c.retryNo, c.status]),
+    [
+      [1, 0, 'failed'],
+      [2, 1, 'succeeded'],
+    ],
+  );
+  assert.equal(h.budget.calls, 2);
+  assert.equal(h.budget.chargedTokens, 14);
+  assert.equal(h.budget.chargedCostMicrosCny, 140);
+  assert.equal(h.calls[0].tokensKnown, false);
+  assert.equal(h.calls[1].tokensKnown, true);
+  await assert.rejects(
+    client.query('UPDATE task_execution_calls SET charged_tokens=0 WHERE id=$1', [h.calls[1].id]),
+    { code: '23514' },
+  );
+  await assert.rejects(
+    client.query('DELETE FROM task_execution_calls WHERE id=$1', [h.calls[0].id]),
+    { code: '23514' },
+  );
+});
+
+test('技术重试最多额外两次，旧调用错误全部保留，重建执行器不能重置次数', async () => {
+  const { identity, id } = await controlledTask();
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    runStep: async () => {
+      calls++;
+      throw new TechnicalStepError('UPSTREAM_UNAVAILABLE');
+    },
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  await controlTick(worker, 10);
+  await controlTick(worker, 20);
+  const d = (await detail(identity, id)).json().data;
+  assert.equal(d.execution, 'failed');
+  assert.equal(d.currentAttempt.error.code, 'EXECUTION_RETRIES_EXHAUSTED');
+  const h = (await history(identity, id)).json().data;
+  assert.equal(h.calls.length, 3);
+  assert.ok(h.calls.every((call) => call.error.code === 'UPSTREAM_UNAVAILABLE'));
+  assert.equal(await new MockTaskExecutor(database.db, { now: () => new Date(now) }).tick(), false);
+  assert.equal(calls, 3);
+});
+
+test('普通错误及伪造retryable标记不能触发技术重试', async () => {
+  const { identity, id } = await controlledTask();
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    runStep: async () => {
+      throw Object.assign(new Error('private-secret-provider-payload'), {
+        retryable: true,
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  const h = (await history(identity, id)).json().data;
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.attempts[0].error.code, 'EXECUTION_STEP_FAILED');
+  assert.equal(JSON.stringify(h).includes('private-secret-provider-payload'), false);
+});
+
+test('单次调用超时可中止不配合的适配器，未知用量不退还，迟到结果不改变历史', async () => {
+  const { identity, id } = await controlledTask({ callTimeoutMs: 20, maxRetries: 0 });
+  const finish = deferred();
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation: chargedReservation,
+    runStep: async () => {
+      await finish.promise;
+      return { usage: { tokens: 0, estimatedCostMicrosCny: 0 } };
+    },
+  });
+  await controlTick(worker);
+  try {
+    assert.equal(await controlTick(worker), true);
+    const h = (await history(identity, id)).json().data;
+    assert.equal(h.attempts[0].error.code, 'EXECUTION_CALL_TIMEOUT');
+    assert.equal(h.calls[0].status, 'timed_out');
+    assert.equal(h.budget.chargedTokens, 10);
+    assert.equal(h.budget.chargedCostMicrosCny, 100);
+    finish.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual((await history(identity, id)).json().data, h);
+  } finally {
+    finish.resolve();
+  }
+});
+
+test('超时调用的技术重试仍预占预算，最多三次调用且不接纳各次迟到结果', async () => {
+  const { identity, id } = await controlledTask({ callTimeoutMs: 15 });
+  const gates = [];
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation: chargedReservation,
+    runStep: async () => {
+      const gate = deferred();
+      gates.push(gate);
+      await gate.promise;
+      return { usage: { tokens: 0, estimatedCostMicrosCny: 0 } };
+    },
+  });
+  try {
+    await controlTick(worker);
+    await controlTick(worker);
+    await controlTick(worker, 10);
+    await controlTick(worker, 20);
+    const h = (await history(identity, id)).json().data;
+    assert.equal(h.attempts[0].error.code, 'EXECUTION_RETRIES_EXHAUSTED');
+    assert.equal(h.calls.length, 3);
+    assert.ok(h.calls.every((call) => call.status === 'timed_out'));
+    assert.equal(h.budget.chargedTokens, 30);
+    assert.equal(h.budget.chargedCostMicrosCny, 300);
+  } finally {
+    for (const gate of gates) gate.resolve();
+  }
+});
+
+test('步骤和执行总超时会在调度前终结任务，不调用后续步骤', async () => {
+  const { identity, id } = await controlledTask({
+    callTimeoutMs: 100,
+    stepTimeoutMs: 200,
+    attemptTimeoutMs: 400,
+  });
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    runStep: async () => {
+      calls++;
+    },
+  });
+  await controlTick(worker);
+  await controlTick(worker, 201);
+  const d = (await detail(identity, id)).json().data;
+  assert.equal(d.currentAttempt.error.code, 'EXECUTION_STEP_TIMEOUT');
+  assert.equal(calls, 0);
+  assert.equal(d.workLock, null);
+});
+
+test('排队和澄清等待不计时；澄清恢复同次尝试继续累计，不能重置总超时', async () => {
+  const { identity, id } = await controlledTask({ attemptTimeoutMs: 1500 }, 'clarification');
+  const worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+  await controlTick(worker, 60000);
+  await controlTick(worker, 200);
+  let d = (await detail(identity, id)).json().data;
+  assert.equal(d.execution, 'awaiting_clarification');
+  assert.equal(d.currentAttempt.control.activeElapsedMs, 200);
+  const attemptId = d.currentAttempt.id;
+  now = new Date(now.getTime() + 60000);
+  const response = await execute(identity, id, 'clarify', {
+    expectedRevision: d.task.revision,
+    attemptId,
+    answers: d.task.clarifications.map((q) => ({ questionId: q.questionId, answer: '明确要求' })),
+  });
+  assert.equal(response.statusCode, 202, response.body);
+  await controlTick(worker, 60000);
+  await controlTick(worker, 200);
+  await controlTick(worker, 500);
+  await controlTick(worker, 600);
+  d = (await detail(identity, id)).json().data;
+  assert.equal(d.currentAttempt.id, attemptId);
+  assert.equal(d.currentAttempt.error.code, 'EXECUTION_ATTEMPT_TIMEOUT');
+  assert.equal(d.currentAttempt.control.activeElapsedMs, 1500);
+  const h = (await history(identity, id)).json().data;
+  assert.equal(h.calls.length, 3);
+});
+
+for (const metric of ['calls', 'tokens', 'cost']) {
+  test(`任务级${metric}预算在人工重试和配置变更后仍累计，超限前不发送调用`, async () => {
+    const overrides =
+      metric === 'calls'
+        ? { maxCalls: 1 }
+        : metric === 'tokens'
+          ? { maxTokens: 10 }
+          : { maxCostMicrosCny: 10 };
+    const { identity, id, limits } = await controlledTask(overrides);
+    let calls = 0;
+    const worker = new MockTaskExecutor(database.db, {
+      now: () => new Date(now),
+      reservation: {
+        kind: 'readonly',
+        maxTokens: metric === 'tokens' ? 6 : 0,
+        maxCostMicrosCny: metric === 'cost' ? 6 : 0,
+        pricingRef: 'synthetic-v1',
+      },
+      runStep: async () => {
+        calls++;
+      },
+    });
+    await controlTick(worker);
+    await controlTick(worker);
+    await controlTick(worker);
+    let d = (await detail(identity, id)).json().data;
+    assert.equal(d.currentAttempt.error.code, `EXECUTION_BUDGET_${metric.toUpperCase()}_EXCEEDED`);
+    const oldAttempt = d.currentAttempt.id;
+    await app.close();
+    app = application({
+      tasks: new TaskService(database.db, () => new Date(now), {
+        stepDelayMs: 1,
+        executionLimits: {
+          ...readExecutionLimits({}),
+          callTimeoutMs: 100,
+          stepTimeoutMs: 1000,
+          attemptTimeoutMs: 5000,
+        },
+      }),
+    });
+    const retried = await execute(identity, id, 'retry', {
+      expectedRevision: d.task.revision,
+      previousAttemptId: oldAttempt,
+      restartTerminated: false,
+      reason: '新尝试不能重置任务预算',
+    });
+    assert.equal(retried.statusCode, 202, retried.body);
+    await controlTick(worker);
+    await controlTick(worker);
+    d = (await detail(identity, id)).json().data;
+    assert.notEqual(d.currentAttempt.id, oldAttempt);
+    assert.equal(d.execution, 'failed');
+    assert.equal(calls, 1);
+    const h = (await history(identity, id)).json().data;
+    assert.deepEqual(h.budget.limits, limits);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.attempts.length, 2);
+    await assert.rejects(
+      client.query('UPDATE task_execution_budgets SET calls=0 WHERE task_id=$1', [id]),
+      { code: '23514' },
+    );
+    await assert.rejects(
+      client.query("UPDATE task_execution_budgets SET limits='{}' WHERE task_id=$1", [id]),
+      { code: '23514' },
+    );
+  });
+}
+
+test('成功调用按已知用量释放多余预占，部分未知字段保留预占，计价版本随调用保留', async () => {
+  const { identity, id } = await controlledTask();
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation: chargedReservation,
+    runStep: async () => ({ usage: { tokens: 3 } }),
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  const h = (await history(identity, id)).json().data;
+  assert.equal(h.budget.chargedTokens, 3);
+  assert.equal(h.budget.chargedCostMicrosCny, 100);
+  assert.equal(h.calls[0].costKnown, false);
+  assert.equal(h.calls[0].pricingRef, chargedReservation.pricingRef);
+  assert.equal(h.calls[0].reservedTokens, 10);
+});
+
+for (const usage of [{ tokens: -1 }, { tokens: 11, estimatedCostMicrosCny: 101 }]) {
+  test(`适配器无效或超上界用量必须失败并保留消耗 ${JSON.stringify(usage)}`, async () => {
+    const { identity, id } = await controlledTask();
+    const worker = new MockTaskExecutor(database.db, {
+      now: () => new Date(now),
+      reservation: chargedReservation,
+      runStep: async () => ({ usage }),
+    });
+    await controlTick(worker);
+    await controlTick(worker);
+    const d = (await detail(identity, id)).json().data;
+    assert.equal(d.execution, 'failed');
+    const h = (await history(identity, id)).json().data;
+    assert.equal(h.calls.length, 1);
+    assert.ok(h.budget.chargedTokens >= 10);
+    assert.ok(h.budget.chargedCostMicrosCny >= 100);
+  });
+}
+
+test('未配置模型用量上界或计价版本时拒绝调用，发布不属于允许的技术调用类别', async () => {
+  const { identity, id } = await controlledTask();
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation: { kind: 'model', maxTokens: 0, maxCostMicrosCny: 0, pricingRef: '' },
+    runStep: async () => {
+      calls++;
+    },
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  assert.equal(calls, 0);
+  assert.equal(
+    (await detail(identity, id)).json().data.currentAttempt.error.code,
+    'EXECUTION_PRICING_UNCONFIGURED',
+  );
+});
+
+for (const scope of ['step', 'attempt']) {
+  test(`慢调用仍在途时后台${scope}超时收敛，不退还未知用量且忽略迟到结果`, async () => {
+    const { identity, id } = await controlledTask({
+      callTimeoutMs: 1000,
+      stepTimeoutMs: 2000,
+      attemptTimeoutMs: scope === 'attempt' ? 2000 : 4000,
+    });
+    const entered = deferred(),
+      finish = deferred();
+    const worker = new MockTaskExecutor(database.db, {
+      now: () => new Date(now),
+      reservation: chargedReservation,
+      runStep: async () => {
+        entered.resolve();
+        await finish.promise;
+        return { usage: { tokens: 0, estimatedCostMicrosCny: 0 } };
+      },
+    });
+    await controlTick(worker);
+    const pending = controlTick(worker);
+    try {
+      await entered.promise;
+      now = new Date(now.getTime() + 2000);
+      assert.equal(
+        await new MockTaskExecutor(database.db, {
+          enabled: false,
+          now: () => new Date(now),
+        }).tick(),
+        true,
+      );
+      const d = (await detail(identity, id)).json().data;
+      assert.equal(
+        d.currentAttempt.error.code,
+        scope === 'attempt' ? 'EXECUTION_ATTEMPT_TIMEOUT' : 'EXECUTION_STEP_TIMEOUT',
+      );
+      assert.equal(await worker.heartbeat(), 0);
+      assert.equal(await pending, false);
+      const h = (await history(identity, id)).json().data;
+      assert.equal(h.calls[0].status, 'interrupted');
+      assert.equal(h.budget.chargedTokens, 10);
+      finish.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual((await history(identity, id)).json().data, h);
+    } finally {
+      finish.resolve();
+      await pending;
+    }
+  });
+}
+
+test('技术重试同样受任务调用次数上限约束，不会调出第三个请求', async () => {
+  const { identity, id } = await controlledTask({ maxCalls: 2 });
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    runStep: async () => {
+      calls++;
+      throw new TechnicalStepError('NETWORK_ERROR');
+    },
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  await controlTick(worker, 10);
+  await controlTick(worker, 20);
+  const h = (await history(identity, id)).json().data;
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.budget.calls, 2);
+  assert.equal(calls, 2);
+  assert.equal(h.attempts[0].error.code, 'EXECUTION_BUDGET_CALLS_EXCEEDED');
+});
+
+test('取消在途调用后预占额度跨人工重试保留，原调用迟到不能退款', async () => {
+  const { identity, id } = await controlledTask({ maxTokens: 10 });
+  const entered = deferred(),
+    finish = deferred();
+  const reservation = { ...chargedReservation, maxTokens: 6 };
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation,
+    runStep: async () => {
+      entered.resolve();
+      await finish.promise;
+      return { usage: { tokens: 0, estimatedCostMicrosCny: 0 } };
+    },
+  });
+  await controlTick(worker);
+  const pending = controlTick(worker);
+  try {
+    await entered.promise;
+    let d = (await detail(identity, id)).json().data;
+    const stopped = await execute(
+      identity,
+      id,
+      'stop',
+      { expectedRevision: d.task.revision, reason: '停止在途调用' },
+      { attemptId: d.currentAttempt.id },
+    );
+    assert.equal(stopped.statusCode, 202, stopped.body);
+    d = stopped.json().data;
+    const retried = await execute(identity, id, 'retry', {
+      expectedRevision: d.task.revision,
+      previousAttemptId: d.currentAttempt.id,
+      restartTerminated: false,
+      reason: '保留原调用额度重试',
+    });
+    assert.equal(retried.statusCode, 202, retried.body);
+    const other = new MockTaskExecutor(database.db, {
+      now: () => new Date(now),
+      reservation,
+      runStep: async () => assert.fail('budget must prevent dispatch'),
+    });
+    await controlTick(other);
+    await controlTick(other);
+    const h = (await history(identity, id)).json().data;
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].status, 'interrupted');
+    assert.equal(h.budget.chargedTokens, 6);
+    assert.equal(h.attempts[0].error.code, 'EXECUTION_BUDGET_TOKENS_EXCEEDED');
+    finish.resolve();
+    assert.equal(await pending, false);
+    assert.deepEqual((await history(identity, id)).json().data, h);
+  } finally {
+    finish.resolve();
+    await pending;
+  }
+});
+
+test('调用结算事务失败时预占和调用状态原子回滚；重启处理中保留原费用', async () => {
+  const { identity, id } = await controlledTask();
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation: chargedReservation,
+    runStep: async () => {
+      calls++;
+      return { usage: { tokens: 4, estimatedCostMicrosCny: 40 } };
+    },
+  });
+  await controlTick(worker);
+  await client.query(
+    "CREATE FUNCTION d9_charge_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='execution.call_finished' THEN RAISE EXCEPTION 'charge-commit-failed'; END IF; RETURN NEW; END $$",
+  );
+  await client.query(
+    'CREATE TRIGGER d9_charge_failure BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION d9_charge_failure()',
+  );
+  try {
+    await assert.rejects(controlTick(worker));
+  } finally {
+    await client.query('DROP TRIGGER d9_charge_failure ON audit_events');
+    await client.query('DROP FUNCTION d9_charge_failure()');
+  }
+  let h = (await history(identity, id)).json().data;
+  assert.equal(h.budget.chargedTokens, 10);
+  assert.equal(h.budget.chargedCostMicrosCny, 100);
+  assert.equal(h.calls[0].status, 'running');
+  assert.equal(await controlTick(worker), false);
+  now = new Date(now.getTime() + 31000);
+  await new MockTaskExecutor(database.db, { now: () => new Date(now) }).tick();
+  h = (await history(identity, id)).json().data;
+  assert.equal(h.calls[0].status, 'interrupted');
+  assert.equal(h.budget.chargedCostMicrosCny, 100);
+  assert.equal(calls, 1);
+});
+
+test('发布类别不能进入技术重试调用器', async () => {
+  const { identity, id } = await controlledTask();
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation: { ...chargedReservation, kind: 'publish' },
+    runStep: async () => assert.fail('publication must not enter retry middleware'),
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  assert.equal(
+    (await detail(identity, id)).json().data.currentAttempt.error.code,
+    'EXECUTION_PRICING_UNCONFIGURED',
+  );
+});
+
+test('配置单价计算的模型预占与结算进入任务账本，预算不足时阻止下一次请求', async () => {
+  const { pricedModelReservation, pricedModelUsage } =
+    await import('../backend/src/execution-pricing.ts');
+  const { identity, id } = await controlledTask({ maxTokens: 1000, maxCostMicrosCny: 2000 });
+  const pricing = {
+    version: 'synthetic-cny-v1',
+    inputMicrosCnyPerMillion: 2000000,
+    outputMicrosCnyPerMillion: 8000000,
+  };
+  const reservation = pricedModelReservation(200, 100, pricing);
+  let calls = 0;
+  const worker = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    reservation,
+    runStep: async (input) => {
+      assert.equal(input.maxTokens, 300);
+      assert.equal(input.maxCostMicrosCny, 1200);
+      calls++;
+      return pricedModelUsage(100, 50, pricing);
+    },
+  });
+  await controlTick(worker);
+  await controlTick(worker);
+  let h = (await history(identity, id)).json().data;
+  assert.equal(h.budget.chargedTokens, 150);
+  assert.equal(h.budget.chargedCostMicrosCny, 600);
+  assert.equal(h.calls[0].kind, 'model');
+  assert.match(h.calls[0].pricingRef, /input=2000000;output=8000000/);
+  assert.equal(h.calls[0].reservedCostMicrosCny, 1200);
+  await controlTick(worker);
+  await controlTick(worker);
+  h = (await history(identity, id)).json().data;
+  assert.equal(h.budget.chargedCostMicrosCny, 1200);
+  assert.equal(calls, 2);
+  assert.equal(h.attempts[0].error.code, 'EXECUTION_BUDGET_COST_EXCEEDED');
 });

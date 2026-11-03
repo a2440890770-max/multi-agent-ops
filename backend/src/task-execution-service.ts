@@ -7,6 +7,8 @@ import type {
   Session,
   TaskDetail,
 } from '@multi-agent-ops/shared';
+import { readExecutionLimits, type ExecutionLimits } from './execution-config.js';
+import { pauseActiveTime, interruptCalls } from './execution-control.js';
 import { AuthError } from './auth.js';
 import { invalidateApproval, lockEditorialTeam } from './editorial-state.js';
 import type { createBusinessDatabase } from './database.js';
@@ -15,6 +17,8 @@ import {
   auditEvents,
   clarificationAnswers,
   executionAttempts,
+  executionCalls,
+  executionBudgets,
   executionSteps,
   idempotencyRecords,
   members,
@@ -41,7 +45,11 @@ export class TaskExecutionService {
     private db: Database,
     private read: ReadTask,
     private now: () => Date,
-    private options: { executorMode?: 'mock' | 'disabled'; stepDelayMs?: number },
+    private options: {
+      executorMode?: 'mock' | 'disabled';
+      stepDelayMs?: number;
+      executionLimits?: ExecutionLimits;
+    },
   ) {}
 
   start(input: Context & { body: OperationBodies['startTask'] }) {
@@ -272,6 +280,8 @@ export class TaskExecutionService {
         } else if (kind === 'stop') {
           if (!previous || previous.id !== input.attemptId || !activeAttempt(previous.status))
             throw new AuthError(409, 'INVALID_STATE', '当前执行尝试已变化或已经结束。');
+          await pauseActiveTime(tx, previous, now);
+          await interruptCalls(tx, previous.id, now, null);
           // Mock work has no external calls: stopping and fencing the old generation
           // can be acknowledged atomically, without waiting for an external worker.
           await tx
@@ -350,6 +360,7 @@ export class TaskExecutionService {
               attemptNo,
               generation: task.workGeneration + 1,
               status: 'queued',
+              executionLimits: this.options.executionLimits ?? readExecutionLimits({}),
               currentStep: '等待模拟执行',
               simulationScenario: scenario,
               requestedBy: actor.id,
@@ -494,8 +505,24 @@ export class TaskExecutionService {
             .limit(limit + 1);
           const page = audit.slice(0, limit);
           const last = page.at(-1);
+          const calls = await tx
+            .select()
+            .from(executionCalls)
+            .where(eq(executionCalls.taskId, taskId))
+            .orderBy(executionCalls.startedAt, executionCalls.id);
+          const [budget] = await tx
+            .select()
+            .from(executionBudgets)
+            .where(eq(executionBudgets.taskId, taskId));
           return {
             attempts: attempts.map(attemptModel),
+            calls: calls.map((call) => ({
+              ...call,
+              startedAt: call.startedAt.toISOString(),
+              deadlineAt: call.deadlineAt.toISOString(),
+              finishedAt: call.finishedAt?.toISOString() ?? null,
+            })),
+            budget: budget ?? null,
             clarificationAnswers: answers.map((answer) => ({
               ...answer,
               answeredAt: answer.answeredAt.toISOString(),

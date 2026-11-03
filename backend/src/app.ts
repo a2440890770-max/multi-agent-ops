@@ -18,6 +18,7 @@ type Dependencies = {
     | 'start'
     | 'retry'
     | 'stop'
+    | 'terminate'
     | 'history'
     | 'clarify'
     | 'editorial'

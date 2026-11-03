@@ -10,6 +10,9 @@ import type {
 import type { createBusinessDatabase } from './database.js';
 import { AuthError } from './auth.js';
 import { lockEditorialTeam } from './editorial-state.js';
+import type { SimulationPublicationAdapter } from './publication-sender.js';
+import { publicationPreflight } from './publication-preflight.js';
+import { PublicationSender } from './publication-sender.js';
 import { publicationModel } from './publication-model.js';
 import {
   auditEvents,
@@ -36,6 +39,7 @@ export class PublicationService {
     private db: Database,
     private read: ReadTask,
     private now: () => Date,
+    private simulationAdapter?: SimulationPublicationAdapter,
   ) {}
   private async model(connection: Connection, row: typeof publicationOperations.$inferSelect) {
     const dispatches = await connection
@@ -139,7 +143,9 @@ export class PublicationService {
   async publish(input: {
     taskId: string;
     actor: Actor;
-    body: OperationBodies['publishContent'];
+    body: Omit<OperationBodies['publishContent'], 'channel'> & {
+      channel: OperationBodies['publishContent']['channel'] | 'simulation';
+    };
     key: string;
     requestId: string;
   }): Promise<{ data: ResponseModels['Publication']; replayed: boolean }> {
@@ -171,7 +177,7 @@ export class PublicationService {
       body.channel,
     ]);
     try {
-      return await this.db.transaction(async (tx) => {
+      const result = await this.db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL lock_timeout='5s'`);
         await tx.execute(sql`SET LOCAL statement_timeout='10s'`);
         const lock = Buffer.from(hash([scopeHash, keyHash]), 'hex')
@@ -271,13 +277,22 @@ export class PublicationService {
           detail.currentContent?.contentHash !== body.contentHash
         )
           throw new AuthError(409, 'APPROVAL_INVALID', '请求与当前批准版本、摘要不一致。');
+        const preflightFailure = await publicationPreflight(tx, detail);
+        if (preflightFailure)
+          throw new AuthError(
+            409,
+            preflightFailure.code === 'PUBLICATION_CANCELLED'
+              ? 'INVALID_STATE'
+              : 'APPROVAL_INVALID',
+            preflightFailure.message,
+          );
         if (!detail.actions.manual_publish_entry.allowed)
           throw new AuthError(
             detail.workLock ? 423 : 409,
             detail.workLock ? 'WORK_LOCKED' : 'APPROVAL_INVALID',
             detail.actions.manual_publish_entry.reason ?? '当前版本不具备交接资格。',
           );
-        if (body.channel !== 'manual')
+        if (body.channel !== 'manual' && !(body.channel === 'simulation' && this.simulationAdapter))
           throw new AuthError(501, 'NOT_IMPLEMENTED', '官方发布尚未接入；当前只支持人工交接。');
         const [previousSuccess] = await tx
           .select({ id: publicationOperations.id })
@@ -314,7 +329,7 @@ export class PublicationService {
               configVersion: approval.configVersion,
               frozenAt: now.toISOString(),
             },
-            status: 'awaiting_manual',
+            status: body.channel === 'simulation' ? 'publishing' : 'awaiting_manual',
             currentDispatchId: dispatchId,
             createdBy: actor.id,
             createdAt: now,
@@ -326,8 +341,8 @@ export class PublicationService {
           operationId,
           dispatchNo: 1,
           approvalId: body.approvalId,
-          channel: 'manual',
-          status: 'awaiting_manual',
+          channel: body.channel,
+          status: body.channel === 'simulation' ? 'publishing' : 'awaiting_manual',
           startedBy: actor.id,
           startedAt: now,
         });
@@ -344,7 +359,10 @@ export class PublicationService {
           taskId,
           actorType: 'member',
           actorId: actor.id,
-          action: 'publication.handed_off',
+          action:
+            body.channel === 'simulation'
+              ? 'publication.simulation_requested'
+              : 'publication.handed_off',
           targetType: 'publication',
           targetId: operationId,
           beforeRevision: task.revision,
@@ -355,6 +373,19 @@ export class PublicationService {
         });
         return finish(operation!, false);
       });
+      if (!result.replayed && body.channel === 'simulation' && this.simulationAdapter) {
+        await new PublicationSender(this.db, this.read, this.now, this.simulationAdapter).send({
+          taskId,
+          operationId: result.data.operation.id,
+          dispatchId: result.data.operation.currentDispatchId,
+          actor,
+        });
+        return {
+          data: await this.get({ taskId, operationId: result.data.operation.id, actor }),
+          replayed: false,
+        };
+      }
+      return result;
     } catch (error) {
       if (error instanceof AuthError) throw error;
       throw new AuthError(

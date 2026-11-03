@@ -1392,3 +1392,20 @@ details p {
   cursor: pointer;
   line-height: 1.8;
 }
+.execution-error-code {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+.execution-calls {
+  width: 100%;
+  min-width: 0;
+  margin-top: 0.5rem;
+}
+.execution-calls summary {
+  cursor: pointer;
+}
+.execution-calls li {
+  overflow-wrap: anywhere;
+}

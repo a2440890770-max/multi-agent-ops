@@ -12,6 +12,7 @@ import type {
 import {
   type PgTableExtraConfigValue,
   boolean,
+  bigint,
   check,
   customType,
   foreignKey,
@@ -329,6 +330,9 @@ export const tasks = pgTable(
       .notNull()
       .default('not_requested'),
     workGeneration: integer('work_generation').notNull().default(0),
+    terminatedBy: uuid('terminated_by').references(() => members.id),
+    terminatedAt: time('terminated_at'),
+    terminationReason: text('termination_reason'),
   },
   (t): PgTableExtraConfigValue[] => [
     foreignKey({
@@ -385,6 +389,10 @@ export const tasks = pgTable(
     }).onDelete('restrict'),
     check('tasks_reference_inputs_check', sql`jsonb_typeof(${t.referenceInputs}) = 'array'`),
     check('tasks_lifecycle_check', sql`${t.lifecycle} IN ('open', 'terminated', 'published')`),
+    check(
+      'tasks_termination_record_check',
+      sql`(${t.terminatedBy} IS NULL AND ${t.terminatedAt} IS NULL AND ${t.terminationReason} IS NULL) OR (${t.lifecycle} = 'terminated' AND ${t.terminatedBy} IS NOT NULL AND ${t.terminatedAt} IS NOT NULL AND ${t.terminationReason} IS NOT NULL AND length(btrim(${t.terminationReason})) > 0)`,
+    ),
     check('tasks_revision_check', sql`${t.revision} >= 1`),
     check(
       'tasks_execution_status_check',
@@ -428,13 +436,23 @@ export const executionAttempts = pgTable(
     createdAt: createdAt(),
     startedAt: time('started_at'),
     finishedAt: time('finished_at'),
-    cancelScope: text('cancel_scope').$type<'stop_attempt'>(),
+    cancelScope: text('cancel_scope').$type<'stop_attempt' | 'terminate_task'>(),
     cancelRequestedAt: time('cancel_requested_at'),
     cancelRequestedBy: uuid('cancel_requested_by'),
     cancelReason: text('cancel_reason'),
     stoppedAt: time('stopped_at'),
     error: jsonb('error').$type<Failure>(),
     nextRunAt: time('next_run_at'),
+    executorId: uuid('executor_id'),
+    claimToken: uuid('claim_token'),
+    claimedAt: time('claimed_at'),
+    heartbeatAt: time('heartbeat_at'),
+    leaseExpiresAt: time('lease_expires_at'),
+    runtimePolicy: jsonb('runtime_policy').$type<import('./execution-config.js').ExecutorPolicy>(),
+    executionLimits:
+      jsonb('execution_limits').$type<import('./execution-config.js').ExecutionLimits>(),
+    activeElapsedMs: integer('active_elapsed_ms').notNull().default(0),
+    activeSince: time('active_since'),
   },
   (t): PgTableExtraConfigValue[] => [
     unique('execution_attempts_task_id_id_key').on(t.taskId, t.id),
@@ -445,6 +463,14 @@ export const executionAttempts = pgTable(
     index('execution_attempts_due_idx')
       .on(t.nextRunAt)
       .where(sql`${t.status} IN ('queued', 'running')`),
+    check('execution_attempts_elapsed_check', sql`${t.activeElapsedMs} >= 0`),
+    index('execution_attempts_lease_idx')
+      .on(t.leaseExpiresAt)
+      .where(sql`${t.status} = 'running'`),
+    check(
+      'execution_attempts_lease_check',
+      sql`(${t.executorId} IS NULL AND ${t.claimToken} IS NULL AND ${t.claimedAt} IS NULL AND ${t.heartbeatAt} IS NULL AND ${t.leaseExpiresAt} IS NULL) OR (${t.executorId} IS NOT NULL AND ${t.claimToken} IS NOT NULL AND ${t.claimedAt} IS NOT NULL AND ${t.heartbeatAt} IS NOT NULL AND ${t.leaseExpiresAt} IS NOT NULL AND ${t.leaseExpiresAt} >= ${t.heartbeatAt} AND ${t.heartbeatAt} >= ${t.claimedAt})`,
+    ),
     foreignKey({
       name: 'execution_attempts_task_fk',
       columns: [t.taskId],
@@ -475,7 +501,7 @@ export const executionAttempts = pgTable(
     ),
     check(
       'execution_attempts_cancel_scope_check',
-      sql`${t.cancelScope} IS NULL OR ${t.cancelScope} = 'stop_attempt'`,
+      sql`${t.cancelScope} IS NULL OR ${t.cancelScope} IN ('stop_attempt','terminate_task')`,
     ),
     check(
       'execution_attempts_snapshot_check',
@@ -502,9 +528,12 @@ export const executionSteps = pgTable(
     startedAt: time('started_at'),
     finishedAt: time('finished_at'),
     durationMs: integer('duration_ms'),
+    retryCount: integer('retry_count').notNull().default(0),
+    nextCallAt: time('next_call_at'),
     error: jsonb('error').$type<Failure>(),
   },
   (t) => [
+    unique('execution_steps_attempt_id_key').on(t.attemptId, t.id),
     unique('execution_steps_attempt_ordinal_key').on(t.attemptId, t.ordinal),
     foreignKey({
       name: 'execution_steps_attempt_fk',
@@ -520,6 +549,7 @@ export const executionSteps = pgTable(
       'execution_steps_status_check',
       sql`${t.status} IN ('queued','running','completed','failed','cancelled')`,
     ),
+    check('execution_steps_retry_check', sql`${t.retryCount} >= 0 AND ${t.retryCount} <= 10`),
     check('execution_steps_duration_check', sql`${t.durationMs} >= 0`),
   ],
 );
@@ -757,7 +787,7 @@ export const publicationDispatches = pgTable(
     previousDispatchId: uuid('previous_dispatch_id'),
     reason: text('reason'),
     approvalId: uuid('approval_id').notNull(),
-    channel: text('channel').$type<'manual' | 'official_api'>().notNull(),
+    channel: text('channel').$type<'manual' | 'official_api' | 'simulation'>().notNull(),
     status: text('status').$type<PublicationStatus>().notNull(),
     startedBy: uuid('started_by')
       .notNull()
@@ -772,6 +802,9 @@ export const publicationDispatches = pgTable(
   (t): PgTableExtraConfigValue[] => [
     unique('publication_dispatches_operation_id_key').on(t.operationId, t.id),
     unique('publication_dispatches_number_key').on(t.operationId, t.dispatchNo),
+    uniqueIndex('publication_dispatches_active_operation_idx')
+      .on(t.operationId)
+      .where(sql`${t.status} IN ('awaiting_manual','publishing','verification_required')`),
     unique('publication_dispatches_previous_key').on(t.operationId, t.previousDispatchId),
     foreignKey({
       name: 'publication_dispatches_previous_fk',
@@ -788,7 +821,10 @@ export const publicationDispatches = pgTable(
       foreignColumns: [publicationOperations.id, publicationOperations.approvalId],
     }),
     check('publication_dispatches_number_check', sql`${t.dispatchNo} >= 1`),
-    check('publication_dispatches_channel_check', sql`${t.channel} IN ('manual','official_api')`),
+    check(
+      'publication_dispatches_channel_check',
+      sql`${t.channel} IN ('manual','official_api','simulation')`,
+    ),
     check(
       'publication_dispatches_status_check',
       sql`${t.status} IN ('awaiting_manual','publishing','verification_required','published','failed')`,
@@ -827,6 +863,106 @@ export const publicationVerifications = pgTable(
     check(
       'publication_verifications_confirmation_check',
       sql`(${t.data}->>'conclusion' <> 'published' OR ((${t.data}->>'manualConfirmed')::boolean AND ${t.data}->>'observedBody' IS NOT NULL AND ${t.data}->>'observedAccountUid' IS NOT NULL AND ${t.data}->>'url' IS NOT NULL)) IS TRUE AND (${t.data}->>'conclusion' <> 'not_published' OR ((${t.data}->>'manualConfirmed')::boolean AND (${t.data}->>'previousDispatchFenced')::boolean)) IS TRUE`,
+    ),
+  ],
+);
+
+/** A durable, immutable admission ticket for a single adapter invocation. */
+export const publicationSendClaims = pgTable(
+  'task_publication_send_claims',
+  {
+    dispatchId: uuid('dispatch_id').primaryKey(),
+    operationId: uuid('operation_id').notNull(),
+    claimedAt: createdAt(),
+    expiresAt: time('expires_at'),
+  },
+  (t) => [
+    foreignKey({
+      name: 'publication_send_claims_dispatch_fk',
+      columns: [t.operationId, t.dispatchId],
+      foreignColumns: [publicationDispatches.operationId, publicationDispatches.id],
+    }),
+  ],
+);
+
+/** Task-wide usage includes every attempt and any unresolved reservation. */
+export const executionBudgets = pgTable(
+  'task_execution_budgets',
+  {
+    taskId: uuid('task_id')
+      .primaryKey()
+      .references(() => tasks.id),
+    limits: jsonb('limits').$type<import('./execution-config.js').ExecutionLimits>().notNull(),
+    calls: integer('calls').notNull().default(0),
+    chargedTokens: bigint('charged_tokens', { mode: 'number' }).notNull().default(0),
+    chargedCostMicrosCny: bigint('charged_cost_micros_cny', { mode: 'number' })
+      .notNull()
+      .default(0),
+  },
+  (t) => [
+    check(
+      'execution_budgets_usage_check',
+      sql`${t.calls} >= 0 AND ${t.chargedTokens} >= 0 AND ${t.chargedCostMicrosCny} >= 0`,
+    ),
+  ],
+);
+
+export const executionCalls = pgTable(
+  'task_execution_calls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    stepId: uuid('step_id').notNull(),
+    callNo: integer('call_no').notNull(),
+    retryNo: integer('retry_no').notNull(),
+    kind: text('kind').$type<'simulation' | 'model' | 'search' | 'readonly'>().notNull(),
+    status: text('status')
+      .$type<'running' | 'succeeded' | 'failed' | 'timed_out' | 'interrupted'>()
+      .notNull(),
+    pricingRef: text('pricing_ref').notNull(),
+    reservedTokens: bigint('reserved_tokens', { mode: 'number' }).notNull(),
+    reservedCostMicrosCny: bigint('reserved_cost_micros_cny', { mode: 'number' }).notNull(),
+    chargedTokens: bigint('charged_tokens', { mode: 'number' }).notNull(),
+    chargedCostMicrosCny: bigint('charged_cost_micros_cny', { mode: 'number' }).notNull(),
+    tokensKnown: boolean('tokens_known').notNull().default(false),
+    costKnown: boolean('cost_known').notNull().default(false),
+    startedAt: time('started_at').notNull(),
+    deadlineAt: time('deadline_at').notNull(),
+    finishedAt: time('finished_at'),
+    error: jsonb('error').$type<Failure>(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'execution_calls_step_fk',
+      columns: [t.attemptId, t.stepId],
+      foreignColumns: [executionSteps.attemptId, executionSteps.id],
+    }),
+    foreignKey({
+      name: 'execution_calls_attempt_fk',
+      columns: [t.taskId, t.attemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }),
+    unique('execution_calls_step_no_key').on(t.stepId, t.callNo),
+    uniqueIndex('execution_calls_active_step_idx')
+      .on(t.stepId)
+      .where(sql`${t.status} = 'running'`),
+    index('execution_calls_task_idx').on(t.taskId, t.startedAt),
+    check(
+      'execution_calls_counts_check',
+      sql`${t.callNo} >= 1 AND ${t.retryNo} >= 0 AND ${t.reservedTokens} >= 0 AND ${t.reservedCostMicrosCny} >= 0 AND ${t.chargedTokens} >= 0 AND ${t.chargedCostMicrosCny} >= 0`,
+    ),
+    check(
+      'execution_calls_kind_check',
+      sql`${t.kind} IN ('simulation','model','search','readonly')`,
+    ),
+    check(
+      'execution_calls_status_check',
+      sql`${t.status} IN ('running','succeeded','failed','timed_out','interrupted')`,
+    ),
+    check(
+      'execution_calls_time_check',
+      sql`${t.deadlineAt} > ${t.startedAt} AND (${t.status} = 'running') = (${t.finishedAt} IS NULL)`,
     ),
   ],
 );

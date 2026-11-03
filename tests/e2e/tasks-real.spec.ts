@@ -5,13 +5,15 @@ import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { expect, test } from '@playwright/test';
 import type { BrowserContext, Page } from '@playwright/test';
 import type { FastifyInstance } from 'fastify';
-import type { TaskDetail } from '@multi-agent-ops/shared';
+import type { ExecutionLimits, TaskDetail } from '@multi-agent-ops/shared';
 import { createApp } from '../../backend/src/app.js';
 import { AuthService } from '../../backend/src/auth.js';
 import { createBusinessDatabase } from '../../backend/src/database.js';
 import { hashPassword } from '../../backend/src/password.js';
 import { TaskService } from '../../backend/src/task-service.js';
 import { MockTaskExecutor } from '../../backend/src/mock-task-executor.js';
+import { readExecutionLimits } from '../../backend/src/execution-config.js';
+import { TechnicalStepError } from '../../backend/src/execution-control.js';
 
 const rawAdminUrl = process.env.TASK_E2E_ADMIN_URL;
 const password = 'synthetic-browser-tasks-password';
@@ -32,6 +34,9 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
   let dbCreated = false;
   let agentCalls = 0;
   let taskClock: Date | null = null;
+  let executor: MockTaskExecutor;
+  const taskOptions = { stepDelayMs: 300, executionLimits: readExecutionLimits({}) };
+  const pendingForwards = new WeakMap<BrowserContext, Set<Promise<void>>>();
   const suffix = randomBytes(6).toString('hex');
   const name = 'tasks_ui_test_' + suffix;
   const role = 'tasks_ui_app_' + suffix;
@@ -76,7 +81,7 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
         },
         { accountAttempts: 100, ipAttempts: 100 },
       ),
-      tasks: new TaskService(database.db, () => taskClock ?? new Date(), { stepDelayMs: 300 }),
+      tasks: new TaskService(database.db, () => taskClock ?? new Date(), taskOptions),
       logging: false,
       checkDatabase: async () => ({ status: 'ready', database: 'connected' }),
       checkAgent: async () => {
@@ -84,7 +89,7 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
         throw new Error('创建闭环禁止自动调用执行器');
       },
     });
-    const executor = new MockTaskExecutor(database.db, { pollMs: 50 });
+    executor = new MockTaskExecutor(database.db, { pollMs: 50 });
     app.addHook('onReady', async () => {
       executor.start();
     });
@@ -96,6 +101,7 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
   test.beforeEach(async ({ context }) => {
     agentCalls = 0;
     taskClock = null;
+    taskOptions.executionLimits = readExecutionLimits({});
     await client.query('TRUNCATE teams,idempotency_records,tasks CASCADE');
     teamId = (
       await client.query("INSERT INTO teams(name) VALUES ('browser test team') RETURNING id")
@@ -108,6 +114,15 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
       )
     ).rows[0].id;
     await proxy(context);
+  });
+  test.afterEach(async ({ context }) => {
+    // Stop future polling requests, then drain the existing proxy work before
+    // context teardown disposes Playwright's fetched response bodies. Unrouting
+    // an active fallback handler can instead continue the same route twice.
+    await context.route('**/api/v1/**', (route) => route.abort());
+    const pending = pendingForwards.get(context);
+    while (pending?.size) await Promise.all([...pending]);
+    executor.start();
   });
   test.afterAll(async () => {
     if (app) await app.close();
@@ -122,10 +137,20 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
   async function proxy(context: BrowserContext) {
     // Forward browser HTTP requests to a real backend using the isolated DB.
     // Responses and session cookies come directly from that backend, without fixtures.
+    const pending = new Set<Promise<void>>();
+    pendingForwards.set(context, pending);
     await context.route('**/api/v1/**', async (route) => {
-      const path = new URL(route.request().url());
-      const response = await route.fetch({ url: serverUrl + path.pathname + path.search });
-      await route.fulfill({ response });
+      const forward = (async () => {
+        const path = new URL(route.request().url());
+        const response = await route.fetch({ url: serverUrl + path.pathname + path.search });
+        await route.fulfill({ response });
+      })();
+      pending.add(forward);
+      try {
+        await forward;
+      } finally {
+        pending.delete(forward);
+      }
     });
   }
   async function openForm(page: Page) {
@@ -772,9 +797,17 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
     await page.reload();
     await expect(page.getByRole('button', { name: '重试确认本次提交' })).toBeEnabled();
     expect(keys).toHaveLength(1);
+    // The history request starts after navigation. Wait for its real response so
+    // teardown cannot dispose the proxy response while it is still forwarding.
+    const historyLoaded = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/v1/tasks/${firstTaskId}/history` &&
+        response.status() === 200,
+    );
     await page.getByRole('button', { name: '重试确认本次提交' }).click();
     await expect(page).toHaveURL(new RegExp(`/tasks/${firstTaskId}$`));
     await expect(page.getByRole('heading', { name: taskTitle, exact: true })).toBeVisible();
+    await historyLoaded;
     expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
     expect((await client.query('SELECT count(*)::int AS n FROM tasks')).rows[0].n).toBe(1);
@@ -824,7 +857,9 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
     await expect(page.getByTestId('mock-output')).toContainText('【模拟产出，仅用于流程验证');
     await expect(page.getByTestId('execution-attempt')).toHaveCount(1);
     await expect(page.getByTestId('execution-attempt')).toContainText('正常完成');
-    await expect(page.getByTestId('execution-attempt').locator('li')).toHaveCount(4);
+    await expect(
+      page.getByTestId('execution-attempt').locator('.execution-steps > li'),
+    ).toHaveCount(4);
     await expect(page.getByRole('button', { name: '发布内容', exact: true })).toBeDisabled();
     await page.screenshot({ path: 'test-results/d4-execution-desktop.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -1877,6 +1912,17 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
     d = await task(page, id);
     expect(d.task.activePublishOperationId).toBe(op.id);
     expect(d.currentPublication!.verifications).toHaveLength(2);
+    await page.reload();
+    const progress = page.getByRole('region', { name: '执行进度', exact: true });
+    await expect(progress).toContainText('需人工处理：发布结果待核实。');
+    await expect(progress).toContainText('确认前不能取消或重新发布');
+    await progress.getByRole('link', { name: '查看发布记录与核实入口' }).click();
+    await expect(
+      page.getByRole('heading', { name: '人工发布交接记录', exact: true }),
+    ).toBeInViewport();
+    await expect(page.getByRole('button', { name: '终止任务', exact: true })).toBeDisabled();
+    await page.reload();
+    await expect(progress).toContainText('发布结果待核实');
     const no = await api(page, 'POST', resultPath + '/verifications', {
       expectedRevision: d.task.revision,
       accountId: op.accountId,
@@ -2035,7 +2081,9 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
     await button.click();
     await page.getByLabel('本次重新交接原因', { exact: true }).fill('   ');
     await page.getByRole('button', { name: '确认重新交接并锁定文案', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('请填写本次重新交接原因');
+    await expect(
+      page.getByRole('alert').filter({ hasText: '请填写本次重新交接原因' }),
+    ).toBeVisible();
     await page
       .getByLabel('本次重新交接原因', { exact: true })
       .fill('已再次核对原批准文案，安排人工发布');
@@ -2359,5 +2407,400 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
     expect(keys[0]).toBe(keys[1]);
     expect(await retryAuditCount()).toBe(1);
     expect((await task(page, id)).currentPublication!.dispatches).toHaveLength(2);
+  });
+
+  async function controlledExecution(
+    page: Page,
+    overrides: Partial<ExecutionLimits> = {},
+    scenario = 'success',
+  ) {
+    await executor.stop();
+    taskClock = new Date();
+    taskOptions.executionLimits = { ...readExecutionLimits({}), ...overrides };
+    await openForm(page);
+    await page.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(page).toHaveURL(/\/tasks\/[a-f0-9-]{36}$/);
+    const id = page.url().split('/').at(-1)!;
+    const response = await api(page, 'POST', `/api/v1/tasks/${id}/attempts`, {
+      expectedRevision: 1,
+      simulationScenario: scenario,
+    });
+    expect(response.statusCode, response.body).toBe(202);
+    await page.reload();
+    return id;
+  }
+  async function controlledTick(worker: MockTaskExecutor, milliseconds = 300) {
+    taskClock = new Date(taskClock!.getTime() + milliseconds);
+    return worker.tick();
+  }
+
+  test('D9 排队与耗时展示，停止保留任务；手机布局与刷新恢复，不展示参数或资源面板', async ({
+    page,
+  }) => {
+    const id = await controlledExecution(page);
+    const progress = page.getByRole('region', { name: '执行进度', exact: true });
+    await expect(progress).toContainText('排队中，等待执行器领取');
+    await expect(progress).toContainText('累计执行耗时');
+    await expect(progress.getByTestId('attempt-times').locator('dd').last()).toHaveText('0 秒');
+    const before = await progress.getByTestId('attempt-times').locator('dd').first().textContent();
+    await expect(progress.getByTestId('attempt-times').locator('dd').first()).not.toHaveText(
+      before!,
+    );
+    await page.reload();
+    await expect(progress).toContainText('排队中，等待执行器领取');
+    await expect(page.getByText('任务累计消耗', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('单次调用超时', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '执行参数', exact: true })).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    taskClock = new Date();
+    await page.getByRole('button', { name: '停止本次执行', exact: true }).click();
+    await expect(page.getByRole('button', { name: '重新执行', exact: true })).toBeEnabled();
+    expect((await task(page, id)).task.lifecycle).toBe('open');
+    await expect(page.getByTestId('execution-attempt')).toContainText('本次停止原因');
+  });
+
+  for (const metric of ['calls', 'tokens', 'cost'] as const) {
+    test(`D9 ${metric}预算不足显示原因与人工处理建议，刷新及人工重试保留历史`, async ({ page }) => {
+      const overrides =
+        metric === 'calls'
+          ? { maxCalls: 1 }
+          : metric === 'tokens'
+            ? { maxTokens: 5 }
+            : { maxCostMicrosCny: 5 };
+      const id = await controlledExecution(page, overrides);
+      const worker = new MockTaskExecutor(database.db, {
+        now: () => new Date(taskClock!),
+        reservation: {
+          kind: 'readonly',
+          maxTokens: metric === 'tokens' ? 6 : 0,
+          maxCostMicrosCny: metric === 'cost' ? 6 : 0,
+          pricingRef: 'synthetic-browser-v1',
+        },
+      });
+      for (let i = 0; i < 6 && (await task(page, id)).execution !== 'failed'; i++)
+        await controlledTick(worker);
+      const failed = await task(page, id);
+      expect(failed.currentAttempt!.error!.code).toBe(
+        `EXECUTION_BUDGET_${metric.toUpperCase()}_EXCEEDED`,
+      );
+      await page.reload();
+      const progress = page.getByRole('region', { name: '执行进度', exact: true });
+      await expect(progress).toContainText('预算超限');
+      await expect(progress).toContainText('重新执行不会清零');
+      await expect(progress).toContainText(failed.currentAttempt!.error!.code);
+      const before = (await api(page, 'GET', `/api/v1/tasks/${id}/history`)).json().data;
+      await page.getByRole('button', { name: '重新执行', exact: true }).click();
+      await expect.poll(async () => (await task(page, id)).currentAttempt!.attemptNo).toBe(2);
+      for (let i = 0; i < 6 && (await task(page, id)).execution !== 'failed'; i++)
+        await controlledTick(worker);
+      await page.reload();
+      await expect(page.getByTestId('execution-attempt')).toHaveCount(2);
+      await expect(page.getByTestId('execution-attempt').last()).toContainText(
+        failed.currentAttempt!.error!.code,
+      );
+      const after = (await api(page, 'GET', `/api/v1/tasks/${id}/history`)).json().data;
+      expect(after.budget).toEqual(before.budget);
+      expect(after.calls).toEqual(before.calls);
+      if (metric === 'tokens') {
+        await progress.screenshot({ path: 'test-results/d9-budget-desktop.png' });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect
+          .poll(() =>
+            page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          )
+          .toBe(true);
+        await progress.screenshot({ path: 'test-results/d9-budget-mobile.png' });
+      }
+    });
+  }
+
+  test('D9 技术重试等待及调用失败历史可展开，成功后仍保留旧错误，历史加载失败可重试', async ({
+    page,
+  }) => {
+    const id = await controlledExecution(page, { retryBaseMs: 10000 });
+    let researchCalls = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const worker = new MockTaskExecutor(database.db, {
+      now: () => new Date(taskClock!),
+      runStep: async ({ role }) => {
+        if (role === 'research' && ++researchCalls === 1)
+          throw new TechnicalStepError('RATE_LIMITED');
+        if (role === 'research') {
+          entered();
+          await held;
+        }
+      },
+    });
+    await controlledTick(worker);
+    await controlledTick(worker);
+    await controlledTick(worker);
+    await page.reload();
+    const history = page.getByRole('region', { name: '执行尝试记录', exact: true });
+    await expect(history).toContainText('等待技术重试');
+    await expect(history).toContainText('预计重试时间');
+    const research = history
+      .locator('.execution-steps > li')
+      .filter({ has: page.getByText('模拟研究资料', { exact: true }) });
+    await research.getByText('调用及失败历史（1 条）', { exact: true }).click();
+    await expect(research).toContainText('RATE_LIMITED');
+    const pending = controlledTick(worker, 10000);
+    try {
+      await started;
+      // Admission does not change the task revision. The history must refresh
+      // independently and distinguish an active retry from backoff waiting.
+      await expect(research).not.toContainText('等待技术重试');
+      await expect(research).toContainText('执行中');
+    } finally {
+      release();
+      await pending;
+    }
+    await controlledTick(worker);
+    await controlledTick(worker);
+    expect((await task(page, id)).execution).toBe('ready');
+    await page.reload();
+    await research.getByText('调用及失败历史（2 条）', { exact: true }).click();
+    await expect(research).toContainText('RATE_LIMITED');
+    await expect(research).toContainText('技术重试第 1 次');
+    const path = `**/api/v1/tasks/${id}/history`;
+    await page.route(path, (route) =>
+      route.fulfill({
+        status: 503,
+        json: {
+          error: { code: 'DEPENDENCY_UNAVAILABLE', message: '验收：历史暂时不可读' },
+          meta: { requestId: 'synthetic' },
+        },
+      }),
+    );
+    await page.reload();
+    await expect(history).toContainText('任务服务暂不可用，请稍后重试。');
+    await page.unroute(path);
+    await page.getByRole('button', { name: '重试加载执行记录', exact: true }).click();
+    await expect(history).toContainText('第 1 次执行');
+  });
+
+  test('D9 澄清等待不增加累计耗时，恢复同次尝试后累计；中断提示人工重试并保留旧失败', async ({
+    page,
+  }) => {
+    const id = await controlledExecution(page, {}, 'clarification');
+    const worker = new MockTaskExecutor(database.db, { now: () => new Date(taskClock!) });
+    await controlledTick(worker);
+    await controlledTick(worker, 2300);
+    let d = await task(page, id);
+    expect(d.execution).toBe('awaiting_clarification');
+    const elapsedMs = d.currentAttempt!.control!.activeElapsedMs;
+    await page.reload();
+    const progress = page.getByRole('region', { name: '执行进度', exact: true });
+    await expect(progress).toContainText('需人工处理：请在“澄清问答”区补充答复');
+    await expect(progress.getByTestId('attempt-times').locator('dd').last()).toHaveText('2 秒');
+    taskClock = new Date(taskClock!.getTime() + 60000);
+    await page.reload();
+    await expect(progress.getByTestId('attempt-times').locator('dd').last()).toHaveText('2 秒');
+    const answer = await api(page, 'POST', `/api/v1/tasks/${id}/clarifications`, {
+      expectedRevision: d.task.revision,
+      attemptId: d.currentAttempt!.id,
+      answers: d.task.clarifications.map((question) => ({
+        questionId: question.questionId,
+        answer: '主题为产品介绍，面向现有用户，要求无冲突。',
+      })),
+    });
+    expect(answer.statusCode, answer.body).toBe(202);
+    await controlledTick(worker);
+    const reaper = new MockTaskExecutor(database.db, {
+      enabled: false,
+      now: () => new Date(taskClock!),
+    });
+    await controlledTick(reaper, 31000);
+    d = await task(page, id);
+    expect(d.currentAttempt!.control!.activeElapsedMs).toBeGreaterThan(elapsedMs);
+    expect(d.currentAttempt!.error!.code).toBe('EXECUTION_INTERRUPTED');
+    await page.reload();
+    await expect(progress).toContainText('需人工处理');
+    await expect(progress).toContainText('执行进程中断');
+    await page.getByLabel('模拟情形').selectOption('success');
+    await page.getByRole('button', { name: '重新执行', exact: true }).click();
+    await expect.poll(async () => (await task(page, id)).currentAttempt!.attemptNo).toBe(2);
+    await expect(page.getByTestId('execution-attempt')).toHaveCount(2);
+    await expect(page.getByTestId('execution-attempt').last()).toContainText(
+      'EXECUTION_INTERRUPTED',
+    );
+  });
+
+  test('D9 旧版缺少耗时统计显示未记录，不将默认零作为历史实际用量', async ({ page }) => {
+    await executor.stop();
+    const id = await createManual(page);
+    const attemptId = randomUUID();
+    await client.query(
+      `INSERT INTO execution_attempts(id,task_id,attempt_no,generation,status,current_step,simulation_scenario,config_snapshot,requested_by,created_at,finished_at,error)
+      VALUES ($1,$2,1,1,'failed','旧执行失败','failure',$3,$4,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,$5)`,
+      [
+        attemptId,
+        id,
+        {
+          executorVersion: 1,
+          originalRequest: '旧版验收',
+          referenceInputs: [],
+          inputRevision: 1,
+          stepDelayMs: 300,
+        },
+        memberId,
+        { code: 'LEGACY_FAILURE', message: '旧错误原样保留', retryable: false },
+      ],
+    );
+    await client.query(
+      "UPDATE tasks SET current_attempt_id=$2,execution_status='failed',work_generation=1,revision=revision+1 WHERE id=$1",
+      [id, attemptId],
+    );
+    await page.reload();
+    const progress = page.getByRole('region', { name: '执行进度', exact: true });
+    await expect(progress.getByTestId('attempt-times').locator('dd')).toHaveText([
+      '未记录',
+      '未记录',
+    ]);
+    await expect(page.getByTestId('execution-attempt')).toContainText('LEGACY_FAILURE');
+  });
+
+  test('终止任务按钮要求填写原因，持久化终止人和时间并失效批准，刷新后禁止发布与编辑', async ({
+    page,
+  }) => {
+    const { id } = await readyHandoff(page);
+    await page.goto('/tasks/' + id);
+    await page.getByRole('button', { name: '终止任务', exact: true }).click();
+    await page.getByRole('button', { name: '确认终止任务', exact: true }).click();
+    await expect(page.getByText('请填写终止原因。', { exact: true })).toBeVisible();
+    const reason = '运营计划调整，取消此任务，禁止继续发布。';
+    await page.getByLabel('终止原因', { exact: true }).fill(reason);
+    await page.getByRole('button', { name: '确认终止任务', exact: true }).click();
+    await expect(page.getByText('任务已终止，后续发布已被阻止。', { exact: true })).toBeVisible();
+    const d = await task(page, id);
+    expect(d.task.lifecycle).toBe('terminated');
+    expect(d.task.terminatedBy).toBe(memberId);
+    expect(d.task.terminatedAt).not.toBeNull();
+    expect(d.task.terminationReason).toBe(reason);
+    expect(d.currentApproval!.status).toBe('invalidated');
+    expect(await handoffCounts()).toEqual({ operations: 0, dispatches: 0, audits: 0 });
+    await page.reload();
+    await expect(page.getByTestId('termination-reason')).toHaveText(reason);
+    await expect(page.getByRole('button', { name: '保存新版本', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '人工发布交接', exact: true })).toBeDisabled();
+    await page.screenshot({ path: 'test-results/d7-termination-desktop.png', fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await page.screenshot({ path: 'test-results/d7-termination-mobile.png', fullPage: true });
+  });
+
+  test('终止等待澄清任务会停止当前执行并保留原因与历史，不再继续生成', async ({ page }) => {
+    const id = await openClarification(page);
+    await page.getByRole('button', { name: '终止任务', exact: true }).click();
+    await page.getByLabel('终止原因', { exact: true }).fill('不再继续此任务。');
+    await page.getByRole('button', { name: '确认终止任务', exact: true }).click();
+    await expect(page.getByTestId('termination-reason')).toHaveText('不再继续此任务。');
+    const d = await task(page, id);
+    expect(d.execution).toBe('cancelled');
+    expect(d.currentAttempt!.cancelScope).toBe('terminate_task');
+    expect(d.currentAttempt!.stoppedAt).not.toBeNull();
+    expect(d.workLock).toBeNull();
+    await page.reload();
+    await expect(page.getByRole('button', { name: '重新执行', exact: true })).toBeDisabled();
+  });
+
+  test('终止提交前断网保留原原因和请求键，刷新先查询，再显式确认原请求', async ({ page }) => {
+    const { id } = await readyHandoff(page);
+    await page.goto('/tasks/' + id);
+    const keys: string[] = [];
+    await page.route('**/api/v1/tasks/*/terminate', async (route) => {
+      keys.push(route.request().headers()['idempotency-key']!);
+      if (keys.length === 1) return route.abort('failed');
+      return route.fallback();
+    });
+    await page.getByRole('button', { name: '终止任务', exact: true }).click();
+    await page.getByLabel('终止原因', { exact: true }).fill('保留这次终止的原始原因');
+    await page.getByRole('button', { name: '确认终止任务', exact: true }).click();
+    await expect(page.getByRole('button', { name: '查询终止结果', exact: true })).toBeEnabled();
+    await page.reload();
+    await expect(
+      page.getByText('原终止原因：保留这次终止的原始原因', { exact: true }),
+    ).toBeVisible();
+    expect(keys).toHaveLength(1);
+    await page.getByRole('button', { name: '查询终止结果', exact: true }).click();
+    await expect(
+      page.getByText('尚未查到任务终止。请核对任务后，显式重试确认原终止请求。', { exact: true }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: '重试确认原终止请求', exact: true }).click();
+    await expect(page.getByTestId('termination-reason')).toHaveText('保留这次终止的原始原因');
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+    expect((await task(page, id)).task.lifecycle).toBe('terminated');
+  });
+
+  test('终止成功但响应丢失，刷新查询到终止事实，不自动再次提交', async ({ page }) => {
+    const { id } = await readyHandoff(page);
+    await page.goto('/tasks/' + id);
+    let posts = 0;
+    await page.route('**/api/v1/tasks/*/terminate', async (route) => {
+      posts++;
+      const response = await route.fetch({
+        url: serverUrl + new URL(route.request().url()).pathname,
+      });
+      expect(response.status()).toBe(202);
+      return route.abort('failed');
+    });
+    await page.getByRole('button', { name: '终止任务', exact: true }).click();
+    await page.getByLabel('终止原因', { exact: true }).fill('终止成功后的响应恢复');
+    await page.getByRole('button', { name: '确认终止任务', exact: true }).click();
+    await expect(page.getByRole('button', { name: '查询终止结果', exact: true })).toBeEnabled();
+    await page.reload();
+    await expect(page.getByTestId('termination-reason')).toHaveText('终止成功后的响应恢复');
+    await expect(page.getByRole('button', { name: '重试确认原终止请求', exact: true })).toHaveCount(
+      0,
+    );
+    expect(posts).toBe(1);
+    expect(
+      (
+        await client.query(
+          "SELECT count(*)::int AS n FROM audit_events WHERE action='task.terminated' AND task_id=$1",
+          [id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+  });
+
+  test('终止确认期间任务版本变化，保留原因并刷新，用户重新确认后才终止', async ({ page }) => {
+    const { id } = await readyHandoff(page);
+    await page.goto('/tasks/' + id);
+    await page.getByRole('button', { name: '终止任务', exact: true }).click();
+    await page.getByLabel('终止原因', { exact: true }).fill('核对最新版本后终止');
+    const d = await task(page, id);
+    expect(
+      (
+        await api(page, 'POST', `/api/v1/tasks/${id}/content-versions`, {
+          expectedRevision: d.task.revision,
+          baseContentVersionId: d.currentContent!.id,
+          body: '另一个成员更新了文案。',
+        })
+      ).statusCode,
+    ).toBe(201);
+    await page.getByRole('button', { name: '确认终止任务', exact: true }).click();
+    await expect(
+      page.getByText('任务状态已变化，请刷新核对后重新确认终止。', { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel('终止原因', { exact: true })).toHaveValue('核对最新版本后终止');
+    expect((await task(page, id)).task.lifecycle).toBe('open');
+    await expect(page.getByLabel('文案内容', { exact: true })).toHaveValue(
+      '另一个成员更新了文案。',
+    );
+    await page.getByRole('button', { name: '确认终止任务', exact: true }).click();
+    await expect(page.getByTestId('termination-reason')).toHaveText('核对最新版本后终止');
   });
 });

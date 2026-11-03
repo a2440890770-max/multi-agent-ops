@@ -1,7 +1,8 @@
+import { readExecutionPricing } from './execution-pricing.js';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readAuthConfig } from './auth-config.js';
-import { readExecutorMode } from './execution-config.js';
+import { readExecutorMode, readExecutorPolicy, readExecutionLimits } from './execution-config.js';
 
 const envPath = fileURLToPath(new URL('../../.env', import.meta.url));
 if (existsSync(envPath)) process.loadEnvFile(envPath);
@@ -21,4 +22,7 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL || undefined,
   auth: readAuthConfig(process.env),
   taskExecutorMode: readExecutorMode(process.env),
+  executionLimits: readExecutionLimits(process.env),
+  executionPricing: readExecutionPricing(process.env),
+  taskExecutorPolicy: readExecutorPolicy(process.env),
 };

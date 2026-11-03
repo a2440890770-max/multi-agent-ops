@@ -7,6 +7,7 @@ export function manualRetryReason(
   >,
   operation: PublishOperation | null,
   entryReason: string | null,
+  channel: 'manual' | 'simulation' = 'manual',
 ): string | null {
   if (!operation || operation.status !== 'failed') return '仅已明确未发布的失败交接可以重新交接。';
   if (entryReason) return entryReason;
@@ -21,7 +22,7 @@ export function manualRetryReason(
   )
     return '原版本、审核、批准或账号已变化，不能复用此交接；请保存新版本后审核批准。';
   const dispatch = operation.dispatches.find((d) => d.id === operation.currentDispatchId);
-  if (!dispatch || dispatch.channel !== 'manual' || dispatch.status !== 'failed')
+  if (!dispatch || dispatch.channel !== channel || dispatch.status !== 'failed')
     return '仅支持已结束且未发布的人工交接。';
   const proof = operation.verifications.filter((r) => r.dispatchId === dispatch.id).at(-1);
   if (
