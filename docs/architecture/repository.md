@@ -15,6 +15,8 @@
 
 ## npm 工作区
 
+D9 新增 [Supervisor 独立模块](supervisor.md)：共享输入/输出 Schema、版本化 Prompt、SDK 原生子 Agent 分派、Research 接入接口及离线权限/交接测试。尚未接入数据库执行器和页面，也没有默认 Research 实现；普通服务启动不发起模型调用，健康信息继续保持 `canExecuteTasks=false`。
+
 D2 增加了统一的 DeepSeek 官方模型配置及 SDK 结构化输出调用模块；当前入口为 `npm run model:verify`，配置与兼容边界见 [模型接入记录](deepseek-model.md)。该模块尚未接入任务执行器，健康信息中的 `canExecuteTasks` 继续保持 `false`。主模型与审核模型通过同一配置模块选择，不加载用户全局 Claude 设置或中转站认证。
 
 D2 另在 Agent 中加入按需初始化的 Mem0 OSS TypeScript SDK，使用 同实例独立记忆库的 PostgreSQL/pgvector 和 OpenAI text-embedding-3-small（1536 维）；SDK 历史存储使用经确认的 SQLite。真实存储与重启验证入口为 `npm run memory:verify`，范围及限制见 [Mem0 接入说明](memory.md)。该技术组件尚未接入业务任务、审批或上下文注入。
