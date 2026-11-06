@@ -87,6 +87,7 @@ function validInput(schema) {
   if (schema.type === 'boolean') return true;
   if (schema.format === 'uri') return 'https://example.com/evidence';
   if (schema.pattern === '^[a-f0-9]{64}$') return 'a'.repeat(64);
+  if (schema.pattern === '^[1-9][0-9]{0,19}$') return '1';
   return 'x'.repeat(Math.max(schema.minLength ?? 1, 1));
 }
 function businessRequest(operationId, identity, overrides = {}) {
@@ -451,6 +452,28 @@ test('全部业务契约覆盖未登录 401、运营管理操作 403、允许身
                 'stopAttempt',
                 'taskHistory',
                 'clarifyTask',
+                'terminateTask',
+                'getAccountRegistration',
+                'registerAccount',
+                'getManualPublicationEntry',
+                'publishContent',
+                'getPublication',
+                'listPublications',
+                'backfillPublication',
+                'verifyPublication',
+                'retryPublication',
+                'listContent',
+                'getContent',
+                'compareContent',
+                'saveContent',
+                'submitReview',
+                'listReviews',
+                'getReview',
+                'decideReview',
+                'listDecisions',
+                'approveContent',
+                'getConfig',
+                'updateConfig',
               ].includes(endpoint.operationId)
             ? 503
             : 501;
@@ -559,7 +582,7 @@ test('业务请求逐次复核角色；降级、升级、禁用、撤销、改�
   assert.equal((await businessRequest('listTasks', identity)).statusCode, 503);
   await client.query("UPDATE members SET role='admin',version=version+1 WHERE id=$1", [memberId]);
   assert.equal((await businessRequest('listMembers', identity)).statusCode, 501);
-  assert.equal((await businessRequest('updateConfig', identity)).statusCode, 501);
+  assert.equal((await businessRequest('updateConfig', identity)).statusCode, 503);
 
   for (const update of [
     "UPDATE members SET status='disabled' WHERE id=$1",
