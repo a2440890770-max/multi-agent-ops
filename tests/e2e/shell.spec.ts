@@ -23,7 +23,9 @@ test('工作台使用真实后端及 Agent 健康检查，并如实显示数据�
     page.getByRole('article').filter({ has: page.getByRole('heading', { name: '后端服务' }) }),
   ).toContainText('已连接');
   await expect(
-    page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Agent 空壳' }) }),
+    page
+      .getByRole('article')
+      .filter({ has: page.getByRole('heading', { name: '创作与审核 Agent' }) }),
   ).toContainText('已连接');
   const card = page
     .getByRole('article')
@@ -35,7 +37,7 @@ test('工作台使用真实后端及 Agent 健康检查，并如实显示数据�
         ? '待配置'
         : '未连接',
   );
-  await expect(page.getByText('独立入口 · 尚无执行能力')).toBeVisible();
+  await expect(page.getByText('结构化文案生成 · 独立审核')).toBeVisible();
 });
 
 test('移动端不出现横向溢出', async ({ page }) => {

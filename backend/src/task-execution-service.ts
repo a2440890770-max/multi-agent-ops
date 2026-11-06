@@ -9,7 +9,14 @@ import type {
 } from '@multi-agent-ops/shared';
 import { AuthError } from './auth.js';
 import type { createBusinessDatabase } from './database.js';
-import { activeAttempt, attemptModel, mockStages, stepModel } from './execution-model.js';
+import {
+  activeAttempt,
+  attemptModel,
+  workflowStages,
+  stepModel,
+  contentModel,
+  reviewModel,
+} from './execution-model.js';
 import {
   auditEvents,
   clarificationAnswers,
@@ -19,6 +26,8 @@ import {
   members,
   taskContents,
   tasks,
+  reviewCycles,
+  manualDecisions,
 } from './schema.js';
 import type { SimulationScenario } from './schema.js';
 
@@ -40,7 +49,7 @@ export class TaskExecutionService {
     private db: Database,
     private read: ReadTask,
     private now: () => Date,
-    private options: { executorMode?: 'mock' | 'disabled'; stepDelayMs?: number },
+    private options: { executorMode?: 'mock' | 'agent' | 'disabled'; stepDelayMs?: number },
   ) {}
 
   start(input: Context & { body: OperationBodies['startTask'] }) {
@@ -66,6 +75,7 @@ export class TaskExecutionService {
         previousAttemptId?: string | null;
         restartTerminated?: boolean;
         reason?: string;
+        originalRequest?: string;
         attemptId?: string;
         answers?: { questionId: string; answer: string }[];
       };
@@ -115,6 +125,7 @@ export class TaskExecutionService {
             body.previousAttemptId ?? null,
             body.restartTerminated ?? false,
             body.reason ?? '',
+            body.originalRequest ?? null,
           ]);
     try {
       return await this.db.transaction(async (tx) => {
@@ -175,7 +186,10 @@ export class TaskExecutionService {
           await tx.delete(idempotencyRecords).where(eq(idempotencyRecords.id, existing.id));
         if (task.revision !== body.expectedRevision)
           throw new AuthError(409, 'REVISION_CONFLICT', '任务状态已更新，请刷新详情后重新操作。');
-        if (task.lifecycle !== 'open')
+        if (
+          task.lifecycle !== 'open' &&
+          !(kind === 'retry' && task.lifecycle === 'terminated' && body.restartTerminated)
+        )
           throw new AuthError(409, 'INVALID_STATE', '任务已结束，不能执行此操作。');
         const [previous] = task.currentAttemptId
           ? await tx
@@ -188,14 +202,11 @@ export class TaskExecutionService {
                 ),
               )
           : [];
+        const currentDetail = await this.read(tx, taskId, actor);
         let action: string;
         if (kind === 'clarify') {
           if (this.options.executorMode === 'disabled')
-            throw new AuthError(
-              409,
-              'INVALID_STATE',
-              '模拟执行器未启用，请先启用后再提交并恢复执行。',
-            );
+            throw new AuthError(409, 'INVALID_STATE', '执行器未启用，请先启用后再提交并恢复执行。');
           if (
             !previous ||
             previous.id !== body.attemptId!.toLowerCase() ||
@@ -242,7 +253,7 @@ export class TaskExecutionService {
           }));
           const complete = updated.every((question) => !!question.answer?.trim());
           const status = complete ? ('queued' as const) : ('awaiting_clarification' as const);
-          const currentStep = complete ? '等待继续模拟执行' : '等待澄清';
+          const currentStep = complete ? '等待继续执行' : '等待澄清';
           await tx
             .update(executionAttempts)
             .set({
@@ -268,7 +279,15 @@ export class TaskExecutionService {
         } else if (kind === 'stop') {
           if (!previous || previous.id !== input.attemptId || !activeAttempt(previous.status))
             throw new AuthError(409, 'INVALID_STATE', '当前执行尝试已变化或已经结束。');
-          // Mock work has no external calls: stopping and fencing the old generation
+          if (
+            currentDetail.currentReview &&
+            ['queued', 'running'].includes(currentDetail.currentReview.status)
+          )
+            await tx
+              .update(reviewCycles)
+              .set({ status: 'cancelled', finishedAt: now, leaseToken: null, leaseExpiresAt: null })
+              .where(eq(reviewCycles.id, currentDetail.currentReview.id));
+          // Read/generate work has no external calls: stopping and fencing the old generation
           // can be acknowledged atomically, without waiting for an external worker.
           await tx
             .update(executionAttempts)
@@ -311,10 +330,15 @@ export class TaskExecutionService {
           action = 'attempt.stopped';
         } else {
           if (this.options.executorMode === 'disabled')
-            throw new AuthError(409, 'INVALID_STATE', '模拟执行器未启用。');
-          if (previous && activeAttempt(previous.status))
+            throw new AuthError(409, 'INVALID_STATE', '执行器未启用。');
+          if (currentDetail.workLock)
             throw new AuthError(423, 'WORK_LOCKED', '当前执行尝试尚未结束，不能重复启动。');
-          if (kind === 'start' && (previous || task.executionStatus !== null))
+          if (
+            kind === 'start' &&
+            (previous ||
+              (task.executionStatus !== null &&
+                currentDetail.currentContent?.sourceKind !== 'manual'))
+          )
             throw new AuthError(
               409,
               'INVALID_STATE',
@@ -322,12 +346,14 @@ export class TaskExecutionService {
             );
           if (
             kind === 'retry' &&
-            (!previous || previous.id !== body.previousAttemptId || body.restartTerminated)
+            (!previous ||
+              previous.id !== body.previousAttemptId ||
+              (task.lifecycle === 'open' && body.restartTerminated))
           )
             throw new AuthError(
               409,
               'INVALID_STATE',
-              '重新执行必须关联当前已结束尝试；D4 尚不支持重启已终止任务。',
+              '重新执行必须关联当前已结束尝试；请核对任务状态和重启标志。',
             );
           const attemptNo = (previous?.attemptNo ?? 0) + 1;
           if (attemptNo > 100)
@@ -336,7 +362,13 @@ export class TaskExecutionService {
               'INVALID_STATE',
               '当前版本最多保留 100 次完整执行，请创建新任务。',
             );
-          const scenario = body.simulationScenario ?? 'success';
+          if (body.originalRequest !== undefined && !body.originalRequest.trim())
+            throw new AuthError(400, 'VALIDATION_ERROR', '调整后的要求不能为空。');
+          const originalRequest = body.originalRequest ?? task.originalRequest;
+          const scenario =
+            this.options.executorMode === 'agent'
+              ? 'success'
+              : (body.simulationScenario ?? 'success');
           const delay = this.options.stepDelayMs ?? 1000;
           const [attempt] = await tx
             .insert(executionAttempts)
@@ -345,16 +377,17 @@ export class TaskExecutionService {
               attemptNo,
               generation: task.workGeneration + 1,
               status: 'queued',
-              currentStep: '等待模拟执行',
+              currentStep: '等待执行',
               simulationScenario: scenario,
+              executorMode: this.options.executorMode === 'agent' ? 'agent' : 'mock',
               requestedBy: actor.id,
               createdAt: now,
               nextRunAt: new Date(now.getTime() + delay),
               configSnapshot: {
                 executorVersion: 1,
-                mode: 'mock',
+                mode: this.options.executorMode === 'agent' ? 'agent' : 'mock',
                 scenario,
-                originalRequest: task.originalRequest,
+                originalRequest,
                 referenceInputs: task.referenceInputs,
                 inputRevision: task.revision,
                 stepDelayMs: delay,
@@ -363,7 +396,7 @@ export class TaskExecutionService {
             .returning();
           if (!attempt) throw new Error('attempt insert failed');
           await tx.insert(executionSteps).values(
-            mockStages.map((stage, ordinal) => ({
+            workflowStages.map((stage, ordinal) => ({
               attemptId: attempt.id,
               ordinal,
               role: stage.role,
@@ -374,9 +407,15 @@ export class TaskExecutionService {
             .update(tasks)
             .set({
               currentAttemptId: attempt.id,
+              originalRequest,
+              lifecycle: 'open',
+              terminatedAt: null,
+              terminatedBy: null,
+              terminationReason: null,
+              currentReviewCycleId: null,
               currentContentVersionId: null,
               executionStatus: 'queued',
-              currentStep: '等待模拟执行',
+              currentStep: '等待执行',
               errorMessage: null,
               workGeneration: attempt.generation,
               revision: task.revision + 1,
@@ -464,12 +503,25 @@ export class TaskExecutionService {
             .where(eq(clarificationAnswers.taskId, taskId))
             .orderBy(clarificationAnswers.answeredAt, clarificationAnswers.id);
           const steps = await tx
-            .select({ step: executionSteps, outputId: taskContents.id })
+            .select({ step: executionSteps })
             .from(executionSteps)
             .innerJoin(executionAttempts, eq(executionAttempts.id, executionSteps.attemptId))
-            .leftJoin(taskContents, eq(taskContents.originAttemptId, executionAttempts.id))
             .where(eq(executionAttempts.taskId, taskId))
             .orderBy(desc(executionAttempts.attemptNo), executionSteps.ordinal);
+          const contents = await tx
+            .select()
+            .from(taskContents)
+            .where(eq(taskContents.taskId, taskId))
+            .orderBy(taskContents.versionNo);
+          const reviews = await tx
+            .select()
+            .from(reviewCycles)
+            .where(eq(reviewCycles.taskId, taskId))
+            .orderBy(reviewCycles.createdAt, reviewCycles.id);
+          const decisions = await tx
+            .select()
+            .from(manualDecisions)
+            .where(eq(manualDecisions.taskId, taskId));
           const limit = query.limit ?? 20;
           const audit = await tx
             .select({ event: auditEvents, time: timestamp })
@@ -488,12 +540,15 @@ export class TaskExecutionService {
           const page = audit.slice(0, limit);
           const last = page.at(-1);
           return {
+            contents: contents.map(contentModel),
+            reviews: reviews.map(reviewModel),
+            decisions: decisions.map((d) => d.data),
             attempts: attempts.map(attemptModel),
             clarificationAnswers: answers.map((answer) => ({
               ...answer,
               answeredAt: answer.answeredAt.toISOString(),
             })),
-            steps: steps.map(({ step, outputId }) => stepModel(step, outputId ?? undefined)),
+            steps: steps.map(({ step }) => stepModel(step)),
             audit: {
               items: page.map(({ event }) => ({
                 id: event.id,

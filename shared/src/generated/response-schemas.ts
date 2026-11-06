@@ -99,6 +99,21 @@ export const responseSchemas = {
       contentVersionId: { type: 'string' },
       outcome: { type: 'string', enum: ['manual_required', 'pass', 'changes_required'] },
       checks: { type: 'array', items: { type: 'string' } },
+      suggestions: { type: 'array', items: { type: 'string' } },
+      factualEvidenceSufficient: { type: 'boolean' },
+      factChecks: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            claim: { type: 'string' },
+            sourceId: { type: 'string' },
+            quote: { type: 'string' },
+          },
+          required: ['claim', 'sourceId', 'quote'],
+        },
+      },
       blockingIssues: { type: 'array', items: { $ref: '#/components/schemas/ReviewIssue' } },
       scores: {
         type: 'array',
@@ -301,6 +316,7 @@ export const responseSchemas = {
     type: 'object',
     additionalProperties: false,
     properties: {
+      executorMode: { type: 'string', enum: ['disabled', 'mock', 'agent'] },
       errorMessage: { anyOf: [{ type: 'null' }, { type: 'string' }] },
       currentAttempt: {
         anyOf: [
@@ -334,6 +350,8 @@ export const responseSchemas = {
                   { type: 'string', enum: ['success'] },
                   { type: 'string', enum: ['failure'] },
                   { type: 'string', enum: ['clarification'] },
+                  { type: 'string', enum: ['review_failure'] },
+                  { type: 'string', enum: ['factual_failure'] },
                 ],
               },
               requestedBy: { type: 'string' },
@@ -409,6 +427,7 @@ export const responseSchemas = {
               contentHash: { type: 'string' },
               sourceKind: { type: 'string', enum: ['agent', 'manual'] },
               revisionRoundId: { anyOf: [{ type: 'null' }, { type: 'string' }] },
+              revisionRound: { type: 'number' },
               sourceRefs: { type: 'array', items: { $ref: '#/components/schemas/SourceRef' } },
               usedMemoryRefs: { type: 'array', items: { $ref: '#/components/schemas/MemoryRef' } },
               createdBy: { type: 'string' },
@@ -820,6 +839,7 @@ export const responseSchemas = {
       contentHash: { type: 'string' },
       sourceKind: { type: 'string', enum: ['agent', 'manual'] },
       revisionRoundId: { anyOf: [{ type: 'null' }, { type: 'string' }] },
+      revisionRound: { type: 'number' },
       sourceRefs: { type: 'array', items: { $ref: '#/components/schemas/SourceRef' } },
       usedMemoryRefs: { type: 'array', items: { $ref: '#/components/schemas/MemoryRef' } },
       createdBy: { type: 'string' },
@@ -1517,6 +1537,8 @@ export const responseSchemas = {
           { type: 'string', enum: ['success'] },
           { type: 'string', enum: ['failure'] },
           { type: 'string', enum: ['clarification'] },
+          { type: 'string', enum: ['review_failure'] },
+          { type: 'string', enum: ['factual_failure'] },
         ],
       },
       requestedBy: { type: 'string' },
@@ -1693,6 +1715,9 @@ export const responseSchemas = {
     type: 'object',
     additionalProperties: false,
     properties: {
+      contents: { type: 'array', items: { $ref: '#/components/schemas/ContentVersion' } },
+      reviews: { type: 'array', items: { $ref: '#/components/schemas/ReviewCycle' } },
+      decisions: { type: 'array', items: { $ref: '#/components/schemas/ManualDecision' } },
       attempts: { type: 'array', items: { $ref: '#/components/schemas/ExecutionAttempt' } },
       steps: { type: 'array', items: { $ref: '#/components/schemas/AgentStep' } },
       clarificationAnswers: {
@@ -1701,7 +1726,15 @@ export const responseSchemas = {
       },
       audit: { $ref: '#/components/schemas/Page_AuditEvent_' },
     },
-    required: ['attempts', 'steps', 'clarificationAnswers', 'audit'],
+    required: [
+      'contents',
+      'reviews',
+      'decisions',
+      'attempts',
+      'steps',
+      'clarificationAnswers',
+      'audit',
+    ],
   },
   ApiError: {
     type: 'object',

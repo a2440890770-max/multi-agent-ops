@@ -1,5 +1,11 @@
 import { sql } from 'drizzle-orm';
-import type { Clarification, Failure, SourceRef } from '@multi-agent-ops/shared';
+import type {
+  Clarification,
+  Failure,
+  SourceRef,
+  ReviewRecord,
+  ManualDecision,
+} from '@multi-agent-ops/shared';
 import {
   type PgTableExtraConfigValue,
   boolean,
@@ -302,6 +308,10 @@ export const tasks = pgTable(
     revision: integer('revision').notNull().default(1),
     currentAttemptId: uuid('current_attempt_id'),
     currentContentVersionId: uuid('current_content_version_id'),
+    currentReviewCycleId: uuid('workflow_review_cycle_id'),
+    terminatedBy: uuid('terminated_by'),
+    terminatedAt: time('terminated_at'),
+    terminationReason: text('termination_reason'),
     workGeneration: integer('work_generation').notNull().default(0),
   },
   (t): PgTableExtraConfigValue[] => [
@@ -314,6 +324,11 @@ export const tasks = pgTable(
       name: 'tasks_current_content_fk',
       columns: [t.id, t.currentContentVersionId],
       foreignColumns: [taskContents.taskId, taskContents.id],
+    }),
+    foreignKey({
+      name: 'tasks_workflow_review_fk',
+      columns: [t.id, t.currentReviewCycleId],
+      foreignColumns: [reviewCycles.taskId, reviewCycles.id],
     }),
     check('tasks_work_generation_check', sql`${t.workGeneration} >= 0`),
     foreignKey({
@@ -343,10 +358,11 @@ export const tasks = pgTable(
   ],
 );
 
-export type SimulationScenario = 'success' | 'failure' | 'clarification';
+export type SimulationScenario =
+  'success' | 'failure' | 'clarification' | 'review_failure' | 'factual_failure';
 export interface MockSnapshot {
   executorVersion: 1;
-  mode: 'mock';
+  mode: 'mock' | 'agent';
   scenario: SimulationScenario;
   originalRequest: string;
   referenceInputs: SourceRef[];
@@ -362,12 +378,20 @@ export const executionAttempts = pgTable(
     attemptNo: integer('attempt_no').notNull(),
     generation: integer('generation').notNull(),
     status: text('status')
-      .$type<'queued' | 'running' | 'awaiting_clarification' | 'ready' | 'failed' | 'cancelled'>()
+      .$type<
+        | 'queued'
+        | 'running'
+        | 'awaiting_clarification'
+        | 'manual_required'
+        | 'ready'
+        | 'failed'
+        | 'cancelled'
+      >()
       .notNull(),
     currentStep: text('current_step'),
     autoRevisionCount: integer('auto_revision_count').notNull().default(0),
     configVersion: integer('config_version').notNull().default(1),
-    executorMode: text('executor_mode').$type<'mock'>().notNull().default('mock'),
+    executorMode: text('executor_mode').$type<'mock' | 'agent'>().notNull().default('mock'),
     simulationScenario: text('simulation_scenario').$type<SimulationScenario>().notNull(),
     configSnapshot: jsonb('config_snapshot').$type<MockSnapshot>().notNull(),
     clarifications: jsonb('clarifications')
@@ -378,7 +402,7 @@ export const executionAttempts = pgTable(
     createdAt: createdAt(),
     startedAt: time('started_at'),
     finishedAt: time('finished_at'),
-    cancelScope: text('cancel_scope').$type<'stop_attempt'>(),
+    cancelScope: text('cancel_scope').$type<'stop_attempt' | 'terminate_task'>(),
     cancelRequestedAt: time('cancel_requested_at'),
     cancelRequestedBy: uuid('cancel_requested_by'),
     cancelReason: text('cancel_reason'),
@@ -412,20 +436,20 @@ export const executionAttempts = pgTable(
     }).onDelete('restrict'),
     check(
       'execution_attempts_counts_check',
-      sql`${t.attemptNo} >= 1 AND ${t.generation} >= 1 AND ${t.configVersion} >= 1 AND ${t.autoRevisionCount} = 0`,
+      sql`${t.attemptNo} >= 1 AND ${t.generation} >= 1 AND ${t.configVersion} >= 1 AND ${t.autoRevisionCount} BETWEEN 0 AND 3`,
     ),
     check(
       'execution_attempts_status_check',
-      sql`${t.status} IN ('queued', 'running', 'awaiting_clarification', 'ready', 'failed', 'cancelled')`,
+      sql`${t.status} IN ('queued', 'running', 'awaiting_clarification', 'manual_required', 'ready', 'failed', 'cancelled')`,
     ),
-    check('execution_attempts_mode_check', sql`${t.executorMode} = 'mock'`),
+    check('execution_attempts_mode_check', sql`${t.executorMode} IN ('mock','agent')`),
     check(
       'execution_attempts_scenario_check',
-      sql`${t.simulationScenario} IN ('success', 'failure', 'clarification')`,
+      sql`${t.simulationScenario} IN ('success', 'failure', 'clarification', 'review_failure', 'factual_failure')`,
     ),
     check(
       'execution_attempts_cancel_scope_check',
-      sql`${t.cancelScope} IS NULL OR ${t.cancelScope} = 'stop_attempt'`,
+      sql`${t.cancelScope} IS NULL OR ${t.cancelScope} IN ('stop_attempt','terminate_task')`,
     ),
     check(
       'execution_attempts_snapshot_check',
@@ -433,7 +457,7 @@ export const executionAttempts = pgTable(
     ),
     check(
       'execution_attempts_finish_check',
-      sql`(${t.status} IN ('ready','failed','cancelled')) = (${t.finishedAt} IS NOT NULL)`,
+      sql`(${t.status} IN ('manual_required','ready','failed','cancelled')) = (${t.finishedAt} IS NOT NULL)`,
     ),
   ],
 );
@@ -444,6 +468,10 @@ export const executionSteps = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     attemptId: uuid('attempt_id').notNull(),
     ordinal: integer('ordinal').notNull(),
+    outputContentId: uuid('output_content_id'),
+    leaseToken: uuid('lease_token'),
+    leaseExpiresAt: time('lease_expires_at'),
+    technicalAttempts: integer('technical_attempts').notNull().default(0),
     role: text('role').$type<'supervisor' | 'research' | 'content' | 'review'>().notNull(),
     status: text('status')
       .$type<'queued' | 'running' | 'completed' | 'failed' | 'cancelled'>()
@@ -461,7 +489,7 @@ export const executionSteps = pgTable(
       columns: [t.attemptId],
       foreignColumns: [executionAttempts.id],
     }).onDelete('restrict'),
-    check('execution_steps_ordinal_check', sql`${t.ordinal} BETWEEN 0 AND 3`),
+    check('execution_steps_ordinal_check', sql`${t.ordinal} BETWEEN 0 AND 9`),
     check(
       'execution_steps_role_check',
       sql`${t.role} IN ('supervisor','research','content','review')`,
@@ -511,7 +539,10 @@ export const taskContents = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     taskId: uuid('task_id').notNull(),
-    originAttemptId: uuid('origin_attempt_id').notNull(),
+    originAttemptId: uuid('origin_attempt_id'),
+    parentVersionId: uuid('parent_version_id'),
+    sourceKind: text('source_kind').$type<'agent' | 'manual'>().notNull().default('agent'),
+    revisionRound: integer('revision_round').notNull().default(0),
     versionNo: integer('version_no').notNull(),
     body: text('body').notNull(),
     contentHash: text('content_hash').notNull(),
@@ -521,7 +552,11 @@ export const taskContents = pgTable(
   (t): PgTableExtraConfigValue[] => [
     unique('task_contents_task_id_id_key').on(t.taskId, t.id),
     unique('task_contents_task_version_key').on(t.taskId, t.versionNo),
-    unique('task_contents_attempt_key').on(t.originAttemptId),
+    uniqueIndex('task_contents_attempt_round_key')
+      .on(t.originAttemptId, t.revisionRound)
+      .where(sql`${t.sourceKind} = 'agent'`),
+    check('task_contents_round_check', sql`${t.revisionRound} BETWEEN 0 AND 3`),
+    check('task_contents_source_check', sql`${t.sourceKind} IN ('agent','manual')`),
     foreignKey({
       name: 'task_contents_task_fk',
       columns: [t.taskId],
@@ -537,7 +572,87 @@ export const taskContents = pgTable(
       columns: [t.createdBy],
       foreignColumns: [members.id],
     }).onDelete('restrict'),
+    foreignKey({
+      name: 'task_contents_parent_fk',
+      columns: [t.taskId, t.parentVersionId],
+      foreignColumns: [t.taskId, t.id],
+    }),
     check('task_contents_version_check', sql`${t.versionNo} >= 1`),
     check('task_contents_hash_check', sql`${t.contentHash} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+export const reviewCycles = pgTable(
+  'workflow_review_cycles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id),
+    attemptId: uuid('attempt_id'),
+    trigger: text('trigger').$type<'initial_generation' | 'manual_submit'>().notNull(),
+    inputVersionId: uuid('input_version_id').notNull(),
+    currentVersionId: uuid('current_version_id').notNull(),
+    status: text('status')
+      .$type<'queued' | 'running' | 'completed' | 'failed' | 'cancelled'>()
+      .notNull(),
+    records: jsonb('records')
+      .$type<ReviewRecord[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    requestedBy: uuid('requested_by')
+      .notNull()
+      .references(() => members.id),
+    configVersion: integer('config_version').notNull().default(1),
+    generation: integer('generation').notNull(),
+    executorMode: text('executor_mode').$type<'mock' | 'agent'>().notNull(),
+    leaseToken: uuid('lease_token'),
+    leaseExpiresAt: time('lease_expires_at'),
+    technicalAttempts: integer('technical_attempts').notNull().default(0),
+    createdAt: createdAt(),
+    finishedAt: time('finished_at'),
+    error: jsonb('error').$type<Failure>(),
+  },
+  (t) => [
+    unique('review_cycles_task_id_key').on(t.taskId, t.id),
+    foreignKey({
+      name: 'review_cycles_content_fk',
+      columns: [t.taskId, t.inputVersionId],
+      foreignColumns: [taskContents.taskId, taskContents.id],
+    }),
+    foreignKey({
+      name: 'review_cycles_attempt_fk',
+      columns: [t.taskId, t.attemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }),
+    check(
+      'review_cycles_status_check',
+      sql`${t.status} IN ('queued','running','completed','failed','cancelled')`,
+    ),
+    check(
+      'review_cycles_trigger_check',
+      sql`${t.trigger} IN ('initial_generation','manual_submit')`,
+    ),
+    check('review_cycles_mode_check', sql`${t.executorMode} IN ('mock','agent')`),
+    check('review_cycles_records_check', sql`jsonb_typeof(${t.records}) = 'array'`),
+  ],
+);
+
+export const manualDecisions = pgTable(
+  'workflow_manual_decisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id),
+    reviewCycleId: uuid('review_cycle_id').notNull(),
+    data: jsonb('data').$type<ManualDecision>().notNull(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'manual_decisions_review_fk',
+      columns: [t.taskId, t.reviewCycleId],
+      foreignColumns: [reviewCycles.taskId, reviewCycles.id],
+    }),
   ],
 );

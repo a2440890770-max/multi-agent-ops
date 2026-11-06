@@ -16,11 +16,13 @@ import {
   auditEvents,
   executionAttempts,
   taskContents,
+  reviewCycles,
   idempotencyRecords,
   members,
   tasks,
 } from './schema.js';
-import { activeAttempt, attemptModel, contentModel } from './execution-model.js';
+import { activeAttempt, attemptModel, contentModel, reviewModel } from './execution-model.js';
+import { TaskContentService } from './task-content-service.js';
 import { TaskExecutionService } from './task-execution-service.js';
 
 type Database = ReturnType<typeof createBusinessDatabase>['db'];
@@ -35,14 +37,21 @@ function taskDetail(
   account: Account | null,
   attempt: typeof executionAttempts.$inferSelect | null = null,
   content: typeof taskContents.$inferSelect | null = null,
-  enabled = true,
+  mode: 'mock' | 'agent' | 'disabled' = 'mock',
+  cycle: typeof reviewCycles.$inferSelect | null = null,
 ): TaskDetail {
   if (!task.teamId || !task.createdBy)
     throw new AuthError(409, 'INVALID_STATE', '历史任务归属信息不完整，请联系管理员核对后补齐。');
   if (task.accountId && !account)
     throw new AuthError(409, 'INVALID_STATE', '任务绑定的账号不可用，请联系管理员核对团队归属。');
+  const enabled = mode !== 'disabled';
+  const manualReviewActive =
+    cycle?.trigger === 'manual_submit' && ['queued', 'running'].includes(cycle.status);
+  const locked = !!(manualReviewActive || (attempt && activeAttempt(attempt.status)));
+  const editable = task.lifecycle === 'open' && !locked;
   const unavailable = { allowed: false, reason: '该操作尚未实现。' };
   return {
+    executorMode: mode,
     task: {
       id: task.id,
       teamId: task.teamId,
@@ -56,14 +65,14 @@ function taskDetail(
       clarifications: attempt?.clarifications ?? [],
       currentAttemptId: task.currentAttemptId,
       currentContentVersionId: task.currentContentVersionId,
-      currentReviewCycleId: null,
+      currentReviewCycleId: task.currentReviewCycleId,
       currentApprovalId: null,
       activePublishOperationId: null,
       publishedOperationId: null,
       sourceTaskId: null,
-      terminatedBy: null,
-      terminatedAt: null,
-      terminationReason: null,
+      terminatedBy: task.terminatedBy,
+      terminatedAt: task.terminatedAt?.toISOString() ?? null,
+      terminationReason: task.terminationReason,
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
     },
@@ -75,12 +84,18 @@ function taskDetail(
     errorMessage: task.errorMessage,
     currentAttempt: attempt ? attemptModel(attempt) : null,
     currentContent: content ? contentModel(content) : null,
-    currentReview: null,
+    currentReview: cycle ? reviewModel(cycle) : null,
     currentApproval: null,
     currentPublication: null,
     latestReflection: null,
-    workLock:
-      attempt && activeAttempt(attempt.status)
+    workLock: manualReviewActive
+      ? {
+          ownerType: 'manual_review',
+          ownerId: cycle!.id,
+          generation: cycle!.generation,
+          cancelRequested: false,
+        }
+      : attempt && activeAttempt(attempt.status)
         ? {
             ownerType: 'attempt',
             ownerId: attempt.id,
@@ -90,16 +105,21 @@ function taskDetail(
         : null,
     account,
     actions: {
-      save: unavailable,
+      save: { allowed: editable, reason: editable ? null : '请先停止当前工作，或任务已结束。' },
       start: {
-        allowed: enabled && task.lifecycle === 'open' && !attempt && task.executionStatus === null,
+        allowed:
+          enabled &&
+          task.lifecycle === 'open' &&
+          !attempt &&
+          !locked &&
+          (task.executionStatus === null || content?.sourceKind === 'manual'),
         reason: !enabled
-          ? '模拟执行器未启用。'
+          ? '执行器未启用。'
           : task.lifecycle !== 'open'
             ? '任务已结束。'
             : attempt
               ? '已有执行记录，请使用重新执行。'
-              : task.executionStatus !== null
+              : task.executionStatus !== null && content?.sourceKind !== 'manual'
                 ? '历史执行状态缺少尝试记录，请先核对。'
                 : null,
       },
@@ -112,22 +132,33 @@ function taskDetail(
               ? '任务已结束。'
               : null,
       },
-      terminate: unavailable,
+      terminate: {
+        allowed: task.lifecycle === 'open',
+        reason: task.lifecycle === 'open' ? null : '任务已结束。',
+      },
       retry: {
-        allowed:
-          enabled && task.lifecycle === 'open' && !!attempt && !activeAttempt(attempt.status),
+        allowed: enabled && task.lifecycle !== 'published' && !!attempt && !locked,
         reason: !enabled
-          ? '模拟执行器未启用。'
+          ? '执行器未启用。'
           : !attempt
             ? '尚无执行记录。'
-            : activeAttempt(attempt.status)
-              ? '当前尝试尚未结束，请先停止。'
-              : task.lifecycle !== 'open'
-                ? '任务已结束。'
+            : locked
+              ? '当前工作尚未结束，请先停止。'
+              : task.lifecycle === 'published'
+                ? '任务已发布。'
                 : null,
       },
       copy: unavailable,
-      review: unavailable,
+      review: {
+        allowed: enabled && editable && !!content,
+        reason: !enabled
+          ? '执行器未启用。'
+          : !editable
+            ? '请先停止当前工作，或任务已结束。'
+            : !content
+              ? '请先保存文案。'
+              : null,
+      },
       approve: unavailable,
       publish: unavailable,
       backfill: unavailable,
@@ -142,7 +173,7 @@ export class TaskService {
   constructor(
     private db: Database,
     private now: () => Date = () => new Date(),
-    private options: { executorMode?: 'mock' | 'disabled'; stepDelayMs?: number } = {},
+    private options: { executorMode?: 'mock' | 'agent' | 'disabled'; stepDelayMs?: number } = {},
   ) {}
 
   private execution() {
@@ -167,6 +198,23 @@ export class TaskService {
   }
   clarify(input: Parameters<TaskExecutionService['clarify']>[0]) {
     return this.execution().clarify(input);
+  }
+
+  contentCommand(input: Parameters<TaskContentService['command']>[0]) {
+    return new TaskContentService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+      this.options.executorMode ?? 'mock',
+    ).command(input);
+  }
+  versions(input: Parameters<TaskContentService['versions']>[0]) {
+    return new TaskContentService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.now,
+      this.options.executorMode ?? 'mock',
+    ).versions(input);
   }
 
   async list(input: {
@@ -288,7 +336,7 @@ export class TaskService {
             account,
             attempt,
             content,
-            this.options.executorMode !== 'disabled',
+            this.options.executorMode ?? 'mock',
           );
           return {
             task: detail.task,
@@ -329,6 +377,7 @@ export class TaskService {
       // Join the bound account only; do not assign today's default account to old drafts.
       const [row] = await connection
         .select({
+          cycle: reviewCycles,
           task: tasks,
           attempt: executionAttempts,
           content: taskContents,
@@ -370,6 +419,10 @@ export class TaskService {
             eq(taskContents.taskId, tasks.id),
           ),
         )
+        .leftJoin(
+          reviewCycles,
+          and(eq(reviewCycles.id, tasks.currentReviewCycleId), eq(reviewCycles.taskId, tasks.id)),
+        )
         .where(and(eq(tasks.id, taskId), eq(tasks.teamId, actor.teamId)));
       if (!row) throw new AuthError(404, 'NOT_FOUND', '任务不存在或不可访问。');
       return taskDetail(
@@ -377,7 +430,8 @@ export class TaskService {
         row.account,
         row.attempt,
         row.content,
-        this.options.executorMode !== 'disabled',
+        this.options.executorMode ?? 'mock',
+        row.cycle,
       );
     } catch (error) {
       if (error instanceof AuthError) throw error;
@@ -512,7 +566,7 @@ export class TaskService {
           account ?? null,
           null,
           null,
-          this.options.executorMode !== 'disabled',
+          this.options.executorMode ?? 'mock',
         );
         await tx.insert(idempotencyRecords).values({
           scopeHash,

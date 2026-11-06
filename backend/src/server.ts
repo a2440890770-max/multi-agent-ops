@@ -5,12 +5,15 @@ import { config } from './config.js';
 import { createBusinessDatabase } from './database.js';
 import { AuthService } from './auth.js';
 import { TaskService } from './task-service.js';
+import { agentProvider } from './workflow-provider.js';
 import { MockTaskExecutor } from './mock-task-executor.js';
 
 const business = config.databaseUrl ? createBusinessDatabase(config.databaseUrl) : undefined;
 const auth = business && config.auth ? new AuthService(business.db, config.auth) : undefined;
 const executor =
-  business && config.taskExecutorMode === 'mock' ? new MockTaskExecutor(business.db) : undefined;
+  business && config.taskExecutorMode !== 'disabled'
+    ? new MockTaskExecutor(business.db, { provider: agentProvider(config.agentBaseUrl) })
+    : undefined;
 
 const pool = config.databaseUrl
   ? new pg.Pool({

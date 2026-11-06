@@ -4,15 +4,16 @@ import { useAuth } from '../auth.js';
 import { Empty, Notice } from '../components.js';
 import { getTaskHistory, runTaskCommand, TaskRequestError } from '../task-api.js';
 import type { ExecutionCommand } from '../task-api.js';
+import { ReviewResult } from './TaskWorkflow.js';
 import { executionLabels } from '../task-labels.js';
 
-type Scenario = 'success' | 'failure' | 'clarification';
+type Scenario = NonNullable<TaskDetail['currentAttempt']>['simulationScenario'];
 type Pending = { key: string; command: ExecutionCommand };
 const roles = {
   supervisor: '检查原始要求',
-  research: '模拟研究资料',
-  content: '模拟生成文案',
-  review: '模拟检查产出',
+  research: '整理输入资料',
+  content: '生成微博文案',
+  review: '结构化审核',
 };
 const stepStatus = {
   queued: '排队中',
@@ -21,7 +22,13 @@ const stepStatus = {
   failed: '失败',
   cancelled: '已取消',
 };
-const scenarios = { success: '正常完成', failure: '研究步骤失败', clarification: '需要澄清' };
+const scenarios = {
+  success: '正常完成',
+  failure: '研究步骤失败',
+  clarification: '需要澄清',
+  review_failure: '审核连续不通过',
+  factual_failure: '高分但事实证据不足',
+};
 const date = (value: string | null) =>
   value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
 function readPending(key: string): Pending | null {
@@ -70,11 +77,12 @@ export function TaskExecutionControls({
   const auth = useAuth();
   const storageKey = `ops-execution:${JSON.stringify([auth.session?.member.teamId, auth.session?.member.id, detail.task.id])}`;
   const [pending, setPending] = useState<Pending | null>(() => readPending(storageKey));
-  const [scenario, setScenario] = useState<Scenario>('success');
+  const [scenario, setScenario] = useState<Exclude<Scenario, null>>('success');
   const [busy, setBusy] = useState(false);
   const working = useRef(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const isAgent = detail.executorMode === 'agent';
   const active =
     detail.currentAttempt &&
     ['queued', 'running', 'awaiting_clarification'].includes(detail.currentAttempt.status);
@@ -168,9 +176,10 @@ export function TaskExecutionControls({
   }
   return (
     <section className="panel detail-panel" aria-labelledby="execution-controls-title">
-      <h2 id="execution-controls-title">模拟执行</h2>
+      <h2 id="execution-controls-title">文案执行</h2>
       <Notice>
-        当前用于验证任务流程，不调用真实模型、搜索或微博发布。模拟产出不具备审核或发布资格。
+        初稿不计入修改次数；审核未通过最多自动修改 3
+        次，之后转人工。模拟模式不调用真实模型；真实模式需服务端启用 agent。
       </Notice>
       {error && <Notice tone="danger">{error}</Notice>}
       {notice && <Notice tone="success">{notice}</Notice>}
@@ -182,21 +191,23 @@ export function TaskExecutionControls({
           任务正在等待澄清，不会继续生成。请在“澄清问答”区补充答复，或停止本次尝试。
         </Notice>
       )}
-      <label>
-        模拟情形
-        <select
-          aria-label="模拟情形"
-          value={scenario}
-          disabled={busy || !!pending || !!active}
-          onChange={(e) => setScenario(e.target.value as Scenario)}
-        >
-          {Object.entries(scenarios).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
+      {!isAgent && (
+        <label>
+          模拟情形
+          <select
+            aria-label="模拟情形"
+            value={scenario}
+            disabled={busy || !!pending || !!active}
+            onChange={(e) => setScenario(e.target.value as Exclude<Scenario, null>)}
+          >
+            {Object.entries(scenarios).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="button-row">
         {!detail.currentAttempt && (
           <button
@@ -205,7 +216,7 @@ export function TaskExecutionControls({
             title={detail.actions.start.reason ?? undefined}
             onClick={() => command('start')}
           >
-            启动模拟执行
+            {isAgent ? '启动文案执行' : '启动模拟执行'}
           </button>
         )}
         {detail.currentAttempt && !active && (
@@ -245,11 +256,58 @@ export function TaskExecutionControls({
   );
 }
 
+function VersionHistory({
+  contents,
+  history,
+}: {
+  contents: ResponseModels['History']['contents'];
+  history: ResponseModels['History'];
+}) {
+  return (
+    <div className="version-history">
+      {contents.map((content) => {
+        const reviews = (history.reviews ?? []).filter((c) => c.currentVersionId === content.id);
+        return (
+          <article className="inset" key={content.id} data-testid="content-version">
+            <h4>
+              V{content.versionNo} ·{' '}
+              {content.sourceKind === 'manual'
+                ? '人工编辑'
+                : content.revisionRound
+                  ? `自动修改第 ${content.revisionRound} 轮`
+                  : '初稿'}
+            </h4>
+            <p className="muted">保存于 {date(content.createdAt)}</p>
+            <pre className="task-original">{content.body}</pre>
+            {!reviews.length && <p className="muted">此版本暂无结构化审核记录。</p>}
+            {reviews.map((cycle) => (
+              <div key={cycle.id}>
+                <ReviewResult cycle={cycle} />
+                {(history.decisions ?? [])
+                  .filter((d) => cycle.records.some((r) => r.id === d.reviewRecordId))
+                  .map((d) => (
+                    <p key={d.id}>
+                      人工裁决：{d.reason} · 放行 {d.acceptedIssues.length} 项，保留{' '}
+                      {d.unresolvedIssues.length} 项 · {date(d.createdAt)}
+                    </p>
+                  ))}
+              </div>
+            ))}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 export function TaskExecutionHistory({ taskId, revision }: { taskId: string; revision: number }) {
   const { refresh } = useAuth();
   const [history, setHistory] = useState<ResponseModels['History'] | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const unassignedContents = (history?.contents ?? []).filter(
+    (content) => !history?.attempts.some((attempt) => attempt.id === content.originAttemptId),
+  );
   useEffect(() => {
     const controller = new AbortController();
     setError('');
@@ -267,6 +325,7 @@ export function TaskExecutionHistory({ taskId, revision }: { taskId: string; rev
   return (
     <section className="panel detail-panel" aria-labelledby="execution-history-title">
       <h2 id="execution-history-title">执行尝试记录</h2>
+      <p className="muted">每次执行下展示对应文案、自动修改轮次、审核评分和建议；最新执行在前。</p>
       {error && (
         <>
           <Notice tone="danger">{error}</Notice>
@@ -276,6 +335,12 @@ export function TaskExecutionHistory({ taskId, revision }: { taskId: string; rev
       {!history && !error && <p role="status">正在读取执行记录…</p>}
       {history && !history.attempts.length && (
         <Empty title="尚无执行尝试">启动模拟执行后，将在这里保留每次执行及步骤记录。</Empty>
+      )}
+      {history && !!unassignedContents.length && (
+        <>
+          <h3>独立保存的文案与审核</h3>
+          <VersionHistory contents={unassignedContents} history={history} />
+        </>
       )}
       {history?.attempts.map((attempt) => (
         <article
@@ -291,20 +356,15 @@ export function TaskExecutionHistory({ taskId, revision }: { taskId: string; rev
             {attempt.executorMode === 'mock' ? '模拟执行' : '真实执行'} ·{' '}
             {attempt.simulationScenario ? scenarios[attempt.simulationScenario] : '—'}
           </p>
-          <dl className="task-metadata">
-            <dt>执行编号</dt>
-            <dd>{attempt.id}</dd>
-            <dt>发起人 ID</dt>
-            <dd>{attempt.requestedBy}</dd>
-            <dt>创建时间</dt>
-            <dd>{date(attempt.createdAt)}</dd>
-            <dt>开始时间</dt>
-            <dd>{date(attempt.startedAt)}</dd>
-            <dt>结束时间</dt>
-            <dd>{date(attempt.finishedAt)}</dd>
-            <dt>当前步骤</dt>
-            <dd>{attempt.currentStep ?? '—'}</dd>
-          </dl>
+          <p>自动修改轮次：{attempt.autoRevisionCount} / 3</p>
+          <h4>文案版本、评分与建议</h4>
+          <VersionHistory
+            contents={(history.contents ?? []).filter((c) => c.originAttemptId === attempt.id)}
+            history={history}
+          />
+          {!(history.contents ?? []).some((c) => c.originAttemptId === attempt.id) && (
+            <p className="muted">本次执行暂无已保存文案和对应审核。</p>
+          )}
           {attempt.error && <Notice tone="danger">{attempt.error.message}</Notice>}
           {attempt.cancelReason && <p>停止原因：{attempt.cancelReason}</p>}
           {history.clarificationAnswers
@@ -318,20 +378,37 @@ export function TaskExecutionHistory({ taskId, revision }: { taskId: string; rev
                 </small>
               </div>
             ))}
-          <ol className="execution-steps">
-            {history.steps
-              .filter((step) => step.attemptId === attempt.id)
-              .map((step) => (
-                <li key={step.id}>
-                  <strong>{roles[step.role]}</strong>
-                  <span>
-                    {stepStatus[step.status]}
-                    {step.durationMs !== null ? ` · ${step.durationMs} ms` : ''}
-                  </span>
-                  {step.error && <p>{step.error.message}</p>}
-                </li>
-              ))}
-          </ol>
+          <details className="attempt-diagnostics">
+            <summary>查看执行步骤与技术记录</summary>
+            <dl className="task-metadata">
+              <dt>执行编号</dt>
+              <dd>{attempt.id}</dd>
+              <dt>发起人 ID</dt>
+              <dd>{attempt.requestedBy}</dd>
+              <dt>创建时间</dt>
+              <dd>{date(attempt.createdAt)}</dd>
+              <dt>开始时间</dt>
+              <dd>{date(attempt.startedAt)}</dd>
+              <dt>结束时间</dt>
+              <dd>{date(attempt.finishedAt)}</dd>
+              <dt>当前步骤</dt>
+              <dd>{attempt.currentStep ?? '—'}</dd>
+            </dl>
+            <ol className="execution-steps">
+              {history.steps
+                .filter((step) => step.attemptId === attempt.id)
+                .map((step) => (
+                  <li key={step.id}>
+                    <strong>{roles[step.role]}</strong>
+                    <span>
+                      {stepStatus[step.status]}
+                      {step.durationMs !== null ? ` · ${step.durationMs} ms` : ''}
+                    </span>
+                    {step.error && <p>{step.error.message}</p>}
+                  </li>
+                ))}
+            </ol>
+          </details>
         </article>
       ))}
     </section>

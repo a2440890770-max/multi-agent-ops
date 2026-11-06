@@ -1316,10 +1316,72 @@ details p {
 .execution-attempt {
   overflow-wrap: anywhere;
 }
+.task-section-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  padding: 14px 18px;
+  margin-bottom: 22px;
+  border: 1px solid #dce4dc;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+.task-section-links a {
+  color: #285943;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+#workflow-title,
+#execution-history-title,
+#execution-controls-title {
+  scroll-margin-top: 24px;
+}
+.review-result {
+  padding: 16px;
+  margin: 16px 0;
+  border: 1px solid #dce4dc;
+  border-radius: 8px;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.review-scores,
+.review-suggestions {
+  margin: 14px 0;
+}
+.review-scores .button-row {
+  margin: 8px 0;
+}
+.review-scores .pill {
+  font-size: 13px;
+}
+.attempt-diagnostics {
+  border-top: 1px solid #dce4dc;
+  padding-top: 14px;
+  margin-top: 20px;
+}
 .clarification-question {
   margin-bottom: 16px;
   overflow-wrap: anywhere;
 }
 .clarification-question label {
   margin-top: 12px;
+}
+
+.review-decision {
+  margin: 16px 0;
+  border: 1px solid #dce4dc;
+  border-radius: 6px;
+  padding: 12px;
+}
+.decision-option {
+  flex-direction: row;
+  align-items: flex-start;
+  margin: 12px 0;
+}
+.decision-option input[type='checkbox'] {
+  flex: 0 0 auto;
+  margin: 3px 0 0;
+  padding: 0;
+  accent-color: #285943;
 }

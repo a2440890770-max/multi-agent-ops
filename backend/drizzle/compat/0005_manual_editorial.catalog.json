@@ -1,0 +1,2856 @@
+{
+  "sqlHash": "05484f8b9990ef1df7f40a7c7881977bcc769c2c3ec845064df13d14722ab616",
+  "schema": {
+    "tables": {
+      "accounts": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "team_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "platform",
+            "type": "character varying(20)",
+            "not_null": true,
+            "default_value": "'weibo'::character varying",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "platform_account_id",
+            "type": "character varying(128)",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "display_name",
+            "type": "character varying(100)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "authorization_status",
+            "type": "character varying(20)",
+            "not_null": true,
+            "default_value": "'unconfigured'::character varying",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "official_publish_available",
+            "type": "boolean",
+            "not_null": true,
+            "default_value": "false",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "credential_ref",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "authorization_expires_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "last_verified_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "current_config_version",
+            "type": "integer",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "accounts_authorization_status_check",
+            "type": "c",
+            "definition": "CHECK (((authorization_status)::text = ANY (ARRAY['unconfigured'::text, 'valid'::text, 'expired'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "accounts_current_config_version_check",
+            "type": "c",
+            "definition": "CHECK ((current_config_version >= 1))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "accounts_current_config_version_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (id, current_config_version) REFERENCES config_versions(account_id, version)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "accounts_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "accounts_platform_check",
+            "type": "c",
+            "definition": "CHECK (((platform)::text = 'weibo'::text))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "accounts_team_id_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "accounts_team_id_key",
+            "type": "u",
+            "definition": "UNIQUE (team_id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "accounts_pkey",
+            "definition": "CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "accounts_team_id_key",
+            "definition": "CREATE UNIQUE INDEX accounts_team_id_key ON public.accounts USING btree (team_id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": [
+          {
+            "name": "accounts_set_updated_at_trg",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER accounts_set_updated_at_trg BEFORE UPDATE ON public.accounts FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+          }
+        ]
+      },
+      "audit_events": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "team_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "actor_type",
+            "type": "character varying(20)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "actor_id",
+            "type": "character varying(128)",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "action",
+            "type": "character varying(100)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "target_type",
+            "type": "character varying(50)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "target_id",
+            "type": "character varying(128)",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "before_revision",
+            "type": "integer",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "after_revision",
+            "type": "integer",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "outcome",
+            "type": "character varying(20)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "reason",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "request_id",
+            "type": "character varying(128)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "task_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "audit_events_actor_type_check",
+            "type": "c",
+            "definition": "CHECK (((actor_type)::text = ANY (ARRAY['member'::text, 'worker'::text, 'system'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "audit_events_outcome_check",
+            "type": "c",
+            "definition": "CHECK (((outcome)::text = ANY (ARRAY['succeeded'::text, 'rejected'::text, 'failed'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "audit_events_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "audit_events_task_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "audit_events_team_id_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "audit_events_pkey",
+            "definition": "CREATE UNIQUE INDEX audit_events_pkey ON public.audit_events USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "audit_events_request_id_idx",
+            "definition": "CREATE INDEX audit_events_request_id_idx ON public.audit_events USING btree (request_id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "audit_events_task_time_idx",
+            "definition": "CREATE INDEX audit_events_task_time_idx ON public.audit_events USING btree (task_id, created_at DESC NULLS LAST, id DESC NULLS LAST)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "audit_events_team_time_idx",
+            "definition": "CREATE INDEX audit_events_team_time_idx ON public.audit_events USING btree (team_id, created_at DESC)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "config_versions": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "account_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "version",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "profile",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "tone",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "forbidden_topics",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": "'[]'::jsonb",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "rules",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": "'[]'::jsonb",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "model_ref",
+            "type": "character varying(128)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "prompt_version",
+            "type": "character varying(128)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "tool_version",
+            "type": "character varying(128)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "max_auto_revisions",
+            "type": "integer",
+            "not_null": true,
+            "default_value": "3",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "change_reason",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "updated_by",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "config_versions_account_id_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "config_versions_account_version_unique",
+            "type": "u",
+            "definition": "UNIQUE (account_id, version)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "config_versions_forbidden_topics_check",
+            "type": "c",
+            "definition": "CHECK ((jsonb_typeof(forbidden_topics) = 'array'::text))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "config_versions_max_auto_revisions_check",
+            "type": "c",
+            "definition": "CHECK ((max_auto_revisions = 3))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "config_versions_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "config_versions_rules_check",
+            "type": "c",
+            "definition": "CHECK ((jsonb_typeof(rules) = 'array'::text))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "config_versions_updated_by_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (updated_by) REFERENCES members(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "config_versions_version_check",
+            "type": "c",
+            "definition": "CHECK ((version >= 1))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "config_versions_account_version_unique",
+            "definition": "CREATE UNIQUE INDEX config_versions_account_version_unique ON public.config_versions USING btree (account_id, version)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "config_versions_pkey",
+            "definition": "CREATE UNIQUE INDEX config_versions_pkey ON public.config_versions USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "config_versions_updated_by_idx",
+            "definition": "CREATE INDEX config_versions_updated_by_idx ON public.config_versions USING btree (updated_by)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "idempotency_records": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "scope_hash",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "key_hash",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "request_fingerprint",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "status",
+            "type": "character varying(20)",
+            "not_null": true,
+            "default_value": "'processing'::character varying",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "response_status",
+            "type": "integer",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "response_body",
+            "type": "jsonb",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "encrypted_replay",
+            "type": "bytea",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "expires_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "idempotency_expiry_after_creation",
+            "type": "c",
+            "definition": "CHECK ((expires_at > created_at))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "idempotency_records_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "idempotency_records_response_status_check",
+            "type": "c",
+            "definition": "CHECK (((response_status >= 100) AND (response_status <= 599)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "idempotency_records_status_check",
+            "type": "c",
+            "definition": "CHECK (((status)::text = ANY (ARRAY['processing'::text, 'completed'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "idempotency_scope_key_unique",
+            "type": "u",
+            "definition": "UNIQUE (scope_hash, key_hash)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "idempotency_records_expires_at_idx",
+            "definition": "CREATE INDEX idempotency_records_expires_at_idx ON public.idempotency_records USING btree (expires_at)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "idempotency_records_pkey",
+            "definition": "CREATE UNIQUE INDEX idempotency_records_pkey ON public.idempotency_records USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "idempotency_scope_key_unique",
+            "definition": "CREATE UNIQUE INDEX idempotency_scope_key_unique ON public.idempotency_records USING btree (scope_hash, key_hash)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "members": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "team_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "login",
+            "type": "character varying(254)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "password_hash",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "display_name",
+            "type": "character varying(100)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "role",
+            "type": "character varying(20)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "status",
+            "type": "character varying(20)",
+            "not_null": true,
+            "default_value": "'active'::character varying",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "version",
+            "type": "integer",
+            "not_null": true,
+            "default_value": "1",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "auth_version",
+            "type": "integer",
+            "not_null": true,
+            "default_value": "1",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "password_changed_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_by",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "members_auth_version_check",
+            "type": "c",
+            "definition": "CHECK ((auth_version >= 1))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "members_created_by_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (created_by) REFERENCES members(id) ON DELETE SET NULL",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "members_login_key",
+            "type": "u",
+            "definition": "UNIQUE (login)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "members_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "members_role_check",
+            "type": "c",
+            "definition": "CHECK (((role)::text = ANY (ARRAY['admin'::text, 'operator'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "members_status_check",
+            "type": "c",
+            "definition": "CHECK (((status)::text = ANY (ARRAY['active'::text, 'disabled'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "members_team_id_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "members_version_check",
+            "type": "c",
+            "definition": "CHECK ((version >= 1))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "members_login_key",
+            "definition": "CREATE UNIQUE INDEX members_login_key ON public.members USING btree (login)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "members_login_normalized_unique_idx",
+            "definition": "CREATE UNIQUE INDEX members_login_normalized_unique_idx ON public.members USING btree (lower(btrim((login)::text)))",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "members_pkey",
+            "definition": "CREATE UNIQUE INDEX members_pkey ON public.members USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "members_team_id_idx",
+            "definition": "CREATE INDEX members_team_id_idx ON public.members USING btree (team_id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": [
+          {
+            "name": "members_set_updated_at_trg",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER members_set_updated_at_trg BEFORE UPDATE ON public.members FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+          }
+        ]
+      },
+      "sessions": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "member_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "token_hash",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "csrf_secret",
+            "type": "bytea",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "issued_auth_version",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "expires_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "(CURRENT_TIMESTAMP + '08:00:00'::interval)",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "revoked_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "revoke_reason",
+            "type": "character varying(50)",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          }
+        ],
+        "constraints": [
+          {
+            "name": "sessions_expiry_after_creation",
+            "type": "c",
+            "definition": "CHECK ((expires_at > created_at))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "sessions_issued_auth_version_check",
+            "type": "c",
+            "definition": "CHECK ((issued_auth_version >= 1))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "sessions_member_id_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "sessions_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "sessions_token_hash_key",
+            "type": "u",
+            "definition": "UNIQUE (token_hash)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "sessions_expires_at_idx",
+            "definition": "CREATE INDEX sessions_expires_at_idx ON public.sessions USING btree (expires_at)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "sessions_member_id_idx",
+            "definition": "CREATE INDEX sessions_member_id_idx ON public.sessions USING btree (member_id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "sessions_pkey",
+            "definition": "CREATE UNIQUE INDEX sessions_pkey ON public.sessions USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "sessions_token_hash_key",
+            "definition": "CREATE UNIQUE INDEX sessions_token_hash_key ON public.sessions USING btree (token_hash)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "tasks": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "title",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "original_request",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "execution_status",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "now()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "now()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_by",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "team_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "current_step",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "error_message",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "account_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "reference_inputs",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": "'[]'::jsonb",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "lifecycle",
+            "type": "text",
+            "not_null": true,
+            "default_value": "'open'::text",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "revision",
+            "type": "integer",
+            "not_null": true,
+            "default_value": "1",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "current_attempt_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "current_content_version_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "work_generation",
+            "type": "integer",
+            "not_null": true,
+            "default_value": "0",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "current_review_cycle_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "current_approval_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "approval_status",
+            "type": "text",
+            "not_null": true,
+            "default_value": "'not_requested'::text",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          }
+        ],
+        "constraints": [
+          {
+            "name": "tasks_account_id_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_approval_status_check",
+            "type": "c",
+            "definition": "CHECK ((approval_status = ANY (ARRAY['not_requested'::text, 'pending'::text, 'approved'::text, 'invalidated'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_created_by_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (created_by) REFERENCES members(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_current_approval_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (id, current_approval_id) REFERENCES task_version_approvals(task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_current_attempt_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (id, current_attempt_id) REFERENCES execution_attempts(task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_current_content_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (id, current_content_version_id) REFERENCES task_contents(task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_current_review_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (id, current_review_cycle_id) REFERENCES task_review_cycles(task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_execution_status_check",
+            "type": "c",
+            "definition": "CHECK ((execution_status = ANY (ARRAY['awaiting_clarification'::text, 'queued'::text, 'running'::text, 'needs_human'::text, 'ready'::text, 'failed'::text, 'cancelled'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_lifecycle_check",
+            "type": "c",
+            "definition": "CHECK ((lifecycle = ANY (ARRAY['open'::text, 'terminated'::text, 'published'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_reference_inputs_check",
+            "type": "c",
+            "definition": "CHECK ((jsonb_typeof(reference_inputs) = 'array'::text))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_revision_check",
+            "type": "c",
+            "definition": "CHECK ((revision >= 1))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_team_id_fkey",
+            "type": "f",
+            "definition": "FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "tasks_work_generation_check",
+            "type": "c",
+            "definition": "CHECK ((work_generation >= 0))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "tasks_created_by_idx",
+            "definition": "CREATE INDEX tasks_created_by_idx ON public.tasks USING btree (created_by)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "tasks_pkey",
+            "definition": "CREATE UNIQUE INDEX tasks_pkey ON public.tasks USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "tasks_team_created_at_idx",
+            "definition": "CREATE INDEX tasks_team_created_at_idx ON public.tasks USING btree (team_id, created_at DESC)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "teams": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "name",
+            "type": "character varying(100)",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "teams_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "teams_pkey",
+            "definition": "CREATE UNIQUE INDEX teams_pkey ON public.teams USING btree (id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": [
+          {
+            "name": "teams_set_updated_at_trg",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER teams_set_updated_at_trg BEFORE UPDATE ON public.teams FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+          }
+        ]
+      },
+      "execution_attempts": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "task_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "attempt_no",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "generation",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "status",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "current_step",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "auto_revision_count",
+            "type": "integer",
+            "not_null": true,
+            "default_value": "0",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "config_version",
+            "type": "integer",
+            "not_null": true,
+            "default_value": "1",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "executor_mode",
+            "type": "text",
+            "not_null": true,
+            "default_value": "'mock'::text",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "simulation_scenario",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "config_snapshot",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "clarifications",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": "'[]'::jsonb",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "requested_by",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "started_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "finished_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "cancel_scope",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "cancel_requested_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "cancel_requested_by",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "cancel_reason",
+            "type": "text",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "stopped_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "error",
+            "type": "jsonb",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "next_run_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "execution_attempts_cancel_by_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (cancel_requested_by) REFERENCES members(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_cancel_scope_check",
+            "type": "c",
+            "definition": "CHECK (((cancel_scope IS NULL) OR (cancel_scope = 'stop_attempt'::text)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_counts_check",
+            "type": "c",
+            "definition": "CHECK (((attempt_no >= 1) AND (generation >= 1) AND (config_version >= 1) AND (auto_revision_count = 0)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_finish_check",
+            "type": "c",
+            "definition": "CHECK (((status = ANY (ARRAY['ready'::text, 'failed'::text, 'cancelled'::text])) = (finished_at IS NOT NULL)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_mode_check",
+            "type": "c",
+            "definition": "CHECK ((executor_mode = 'mock'::text))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_requested_by_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (requested_by) REFERENCES members(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_scenario_check",
+            "type": "c",
+            "definition": "CHECK ((simulation_scenario = ANY (ARRAY['success'::text, 'failure'::text, 'clarification'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_snapshot_check",
+            "type": "c",
+            "definition": "CHECK (((jsonb_typeof(config_snapshot) = 'object'::text) AND (jsonb_typeof(clarifications) = 'array'::text)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_status_check",
+            "type": "c",
+            "definition": "CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'awaiting_clarification'::text, 'ready'::text, 'failed'::text, 'cancelled'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_task_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_task_id_id_key",
+            "type": "u",
+            "definition": "UNIQUE (task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_attempts_task_no_key",
+            "type": "u",
+            "definition": "UNIQUE (task_id, attempt_no)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "execution_attempts_active_task_idx",
+            "definition": "CREATE UNIQUE INDEX execution_attempts_active_task_idx ON public.execution_attempts USING btree (task_id) WHERE (status = ANY (ARRAY['queued'::text, 'running'::text, 'awaiting_clarification'::text]))",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "execution_attempts_due_idx",
+            "definition": "CREATE INDEX execution_attempts_due_idx ON public.execution_attempts USING btree (next_run_at) WHERE (status = ANY (ARRAY['queued'::text, 'running'::text]))",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "execution_attempts_pkey",
+            "definition": "CREATE UNIQUE INDEX execution_attempts_pkey ON public.execution_attempts USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "execution_attempts_task_id_id_key",
+            "definition": "CREATE UNIQUE INDEX execution_attempts_task_id_id_key ON public.execution_attempts USING btree (task_id, id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "execution_attempts_task_no_key",
+            "definition": "CREATE UNIQUE INDEX execution_attempts_task_no_key ON public.execution_attempts USING btree (task_id, attempt_no)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "execution_steps": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "attempt_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "ordinal",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "role",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "status",
+            "type": "text",
+            "not_null": true,
+            "default_value": "'queued'::text",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "started_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "finished_at",
+            "type": "timestamp with time zone",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "duration_ms",
+            "type": "integer",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "error",
+            "type": "jsonb",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "execution_steps_attempt_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (attempt_id) REFERENCES execution_attempts(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_steps_attempt_ordinal_key",
+            "type": "u",
+            "definition": "UNIQUE (attempt_id, ordinal)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_steps_duration_check",
+            "type": "c",
+            "definition": "CHECK ((duration_ms >= 0))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_steps_ordinal_check",
+            "type": "c",
+            "definition": "CHECK (((ordinal >= 0) AND (ordinal <= 3)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_steps_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_steps_role_check",
+            "type": "c",
+            "definition": "CHECK ((role = ANY (ARRAY['supervisor'::text, 'research'::text, 'content'::text, 'review'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "execution_steps_status_check",
+            "type": "c",
+            "definition": "CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "execution_steps_attempt_ordinal_key",
+            "definition": "CREATE UNIQUE INDEX execution_steps_attempt_ordinal_key ON public.execution_steps USING btree (attempt_id, ordinal)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "execution_steps_pkey",
+            "definition": "CREATE UNIQUE INDEX execution_steps_pkey ON public.execution_steps USING btree (id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "task_contents": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "task_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "origin_attempt_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "version_no",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "body",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "content_hash",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "created_by",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "parent_version_id",
+            "type": "uuid",
+            "not_null": false,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "source_kind",
+            "type": "text",
+            "not_null": true,
+            "default_value": "'agent'::text",
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          }
+        ],
+        "constraints": [
+          {
+            "name": "task_contents_attempt_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id, origin_attempt_id) REFERENCES execution_attempts(task_id, id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_attempt_key",
+            "type": "u",
+            "definition": "UNIQUE (origin_attempt_id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_body_hash_check",
+            "type": "c",
+            "definition": "CHECK ((content_hash = encode(sha256(convert_to(body, 'UTF8'::name)), 'hex'::text)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_creator_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (created_by) REFERENCES members(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_hash_check",
+            "type": "c",
+            "definition": "CHECK ((content_hash ~ '^[a-f0-9]{64}$'::text))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_parent_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id, parent_version_id) REFERENCES task_contents(task_id, id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_source_check",
+            "type": "c",
+            "definition": "CHECK (((source_kind = ANY (ARRAY['agent'::text, 'manual'::text])) AND ((source_kind <> 'agent'::text) OR (origin_attempt_id IS NOT NULL))))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_task_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_task_id_id_key",
+            "type": "u",
+            "definition": "UNIQUE (task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_task_version_key",
+            "type": "u",
+            "definition": "UNIQUE (task_id, version_no)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_contents_version_check",
+            "type": "c",
+            "definition": "CHECK ((version_no >= 1))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "task_contents_attempt_key",
+            "definition": "CREATE UNIQUE INDEX task_contents_attempt_key ON public.task_contents USING btree (origin_attempt_id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "task_contents_pkey",
+            "definition": "CREATE UNIQUE INDEX task_contents_pkey ON public.task_contents USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "task_contents_task_id_id_key",
+            "definition": "CREATE UNIQUE INDEX task_contents_task_id_id_key ON public.task_contents USING btree (task_id, id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "task_contents_task_version_key",
+            "definition": "CREATE UNIQUE INDEX task_contents_task_version_key ON public.task_contents USING btree (task_id, version_no)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": [
+          {
+            "name": "task_contents_immutable",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER task_contents_immutable BEFORE DELETE OR UPDATE ON public.task_contents FOR EACH ROW EXECUTE FUNCTION editorial_history_immutable_v5()"
+          },
+          {
+            "name": "task_contents_parent_guard",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER task_contents_parent_guard BEFORE INSERT ON public.task_contents FOR EACH ROW EXECUTE FUNCTION editorial_parent_guard_v5()"
+          }
+        ]
+      },
+      "clarification_answers": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": "gen_random_uuid()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "task_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "attempt_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "question_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "question",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "answer",
+            "type": "text",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": "default"
+          },
+          {
+            "name": "answered_by",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "answered_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "now()",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "clarification_answers_attempt_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id, attempt_id) REFERENCES execution_attempts(task_id, id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "clarification_answers_attempt_question_key",
+            "type": "u",
+            "definition": "UNIQUE (attempt_id, question_id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "clarification_answers_member_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (answered_by) REFERENCES members(id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "clarification_answers_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "clarification_answers_text_check",
+            "type": "c",
+            "definition": "CHECK ((((char_length(answer) >= 1) AND (char_length(answer) <= 4000)) AND (char_length(btrim(answer)) > 0) AND ((char_length(question) >= 1) AND (char_length(question) <= 4000))))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "clarification_answers_attempt_question_key",
+            "definition": "CREATE UNIQUE INDEX clarification_answers_attempt_question_key ON public.clarification_answers USING btree (attempt_id, question_id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "clarification_answers_pkey",
+            "definition": "CREATE UNIQUE INDEX clarification_answers_pkey ON public.clarification_answers USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "clarification_answers_task_idx",
+            "definition": "CREATE INDEX clarification_answers_task_idx ON public.clarification_answers USING btree (task_id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": []
+      },
+      "task_review_cycles": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "task_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "content_version_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "config_version",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "data",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "task_review_cycles_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_reviews_binding_check",
+            "type": "c",
+            "definition": "CHECK ((((data ->> 'id'::text) = (id)::text) AND ((data ->> 'taskId'::text) = (task_id)::text) AND ((data ->> 'currentVersionId'::text) = (content_version_id)::text) AND (((data ->> 'configVersion'::text))::integer = config_version)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_reviews_content_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id, content_version_id) REFERENCES task_contents(task_id, id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_reviews_task_id_key",
+            "type": "u",
+            "definition": "UNIQUE (task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "task_review_cycles_pkey",
+            "definition": "CREATE UNIQUE INDEX task_review_cycles_pkey ON public.task_review_cycles USING btree (id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "task_reviews_task_id_key",
+            "definition": "CREATE UNIQUE INDEX task_reviews_task_id_key ON public.task_review_cycles USING btree (task_id, id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": [
+          {
+            "name": "task_reviews_immutable",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER task_reviews_immutable BEFORE DELETE OR UPDATE ON public.task_review_cycles FOR EACH ROW EXECUTE FUNCTION editorial_history_immutable_v5()"
+          }
+        ]
+      },
+      "task_review_decisions": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "task_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "review_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "data",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp with time zone",
+            "not_null": true,
+            "default_value": "CURRENT_TIMESTAMP",
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "task_decisions_binding_check",
+            "type": "c",
+            "definition": "CHECK ((((data ->> 'id'::text) = (id)::text) AND (length(btrim((data ->> 'reason'::text))) > 0)))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_decisions_review_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id, review_id) REFERENCES task_review_cycles(task_id, id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_review_decisions_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "task_review_decisions_pkey",
+            "definition": "CREATE UNIQUE INDEX task_review_decisions_pkey ON public.task_review_decisions USING btree (id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": [
+          {
+            "name": "task_decisions_immutable",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER task_decisions_immutable BEFORE DELETE OR UPDATE ON public.task_review_decisions FOR EACH ROW EXECUTE FUNCTION editorial_history_immutable_v5()"
+          }
+        ]
+      },
+      "task_version_approvals": {
+        "table": {
+          "relkind": "r",
+          "relrowsecurity": false,
+          "relforcerowsecurity": false
+        },
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "task_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "content_version_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "review_cycle_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "account_id",
+            "type": "uuid",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "config_version",
+            "type": "integer",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          },
+          {
+            "name": "data",
+            "type": "jsonb",
+            "not_null": true,
+            "default_value": null,
+            "identity": "",
+            "generated": "",
+            "collation": null
+          }
+        ],
+        "constraints": [
+          {
+            "name": "task_approvals_binding_check",
+            "type": "c",
+            "definition": "CHECK ((((data ->> 'id'::text) = (id)::text) AND ((data ->> 'taskId'::text) = (task_id)::text) AND ((data ->> 'contentVersionId'::text) = (content_version_id)::text) AND ((data ->> 'reviewCycleId'::text) = (review_cycle_id)::text) AND ((data ->> 'accountId'::text) = (account_id)::text) AND ((data ->> 'status'::text) = ANY (ARRAY['approved'::text, 'invalidated'::text]))))",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_approvals_config_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (account_id, config_version) REFERENCES config_versions(account_id, version) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_approvals_content_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id, content_version_id) REFERENCES task_contents(task_id, id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_approvals_review_fk",
+            "type": "f",
+            "definition": "FOREIGN KEY (task_id, review_cycle_id) REFERENCES task_review_cycles(task_id, id) ON DELETE RESTRICT",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_approvals_task_id_key",
+            "type": "u",
+            "definition": "UNIQUE (task_id, id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          },
+          {
+            "name": "task_version_approvals_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (id)",
+            "deferrable": false,
+            "deferred": false,
+            "validated": true
+          }
+        ],
+        "indexes": [
+          {
+            "name": "task_approvals_task_id_key",
+            "definition": "CREATE UNIQUE INDEX task_approvals_task_id_key ON public.task_version_approvals USING btree (task_id, id)",
+            "valid": true,
+            "ready": true
+          },
+          {
+            "name": "task_version_approvals_pkey",
+            "definition": "CREATE UNIQUE INDEX task_version_approvals_pkey ON public.task_version_approvals USING btree (id)",
+            "valid": true,
+            "ready": true
+          }
+        ],
+        "triggers": [
+          {
+            "name": "task_approvals_binding",
+            "enabled": "O",
+            "definition": "CREATE TRIGGER task_approvals_binding BEFORE DELETE OR UPDATE ON public.task_version_approvals FOR EACH ROW EXECUTE FUNCTION editorial_approval_binding_v5()"
+          }
+        ]
+      }
+    },
+    "functions": [
+      {
+        "name": "set_updated_at",
+        "language": "plpgsql",
+        "source": "\nBEGIN\n    NEW.updated_at := CURRENT_TIMESTAMP;\n    RETURN NEW;\nEND;\n",
+        "security_definer": false,
+        "volatility": "v",
+        "config": null,
+        "result": "trigger"
+      }
+    ],
+    "manualFunctions": [
+      {
+        "name": "editorial_approval_binding_v5",
+        "source": "\nBEGIN\n  IF TG_OP='DELETE' THEN RAISE EXCEPTION 'immutable approval history' USING ERRCODE='23514'; END IF;\n  IF (to_jsonb(NEW)-'data') IS DISTINCT FROM (to_jsonb(OLD)-'data')\n    OR (NEW.data - ARRAY['status','invalidatedAt','invalidatedReason']) IS DISTINCT FROM (OLD.data - ARRAY['status','invalidatedAt','invalidatedReason'])\n    OR OLD.data->>'status' <> 'approved' OR NEW.data->>'status' <> 'invalidated'\n    OR coalesce(NEW.data->>'invalidatedAt','')='' OR coalesce(btrim(NEW.data->>'invalidatedReason'),'')='' THEN\n    RAISE EXCEPTION 'approval binding is immutable; only invalidation is permitted' USING ERRCODE='23514';\n  END IF;\n  RETURN NEW;\nEND;",
+        "security_definer": false,
+        "volatility": "v",
+        "language": "plpgsql"
+      },
+      {
+        "name": "editorial_history_immutable_v5",
+        "source": "\nBEGIN\n  RAISE EXCEPTION 'immutable editorial history' USING ERRCODE='23514';\nEND;\n",
+        "security_definer": false,
+        "volatility": "v",
+        "language": "plpgsql"
+      },
+      {
+        "name": "editorial_parent_guard_v5",
+        "source": "\nBEGIN\n  IF NEW.parent_version_id IS NOT NULL AND NOT EXISTS (\n    SELECT 1 FROM task_contents p WHERE p.id=NEW.parent_version_id AND p.task_id=NEW.task_id AND p.version_no<NEW.version_no\n  ) THEN RAISE EXCEPTION 'parent must be an earlier version of the same task' USING ERRCODE='23514'; END IF;\n  RETURN NEW;\nEND;",
+        "security_definer": false,
+        "volatility": "v",
+        "language": "plpgsql"
+      }
+    ]
+  }
+}

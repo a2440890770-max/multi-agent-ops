@@ -4,15 +4,17 @@
 
 本仓库使用 **npm workspaces**，由根目录 `package.json` 统一管理 `frontend/`、`backend/`、`agent/`、`shared/`；依赖版本锁定在 `package-lock.json`。
 
-当前交付包括 **D1 工程骨架、接口契约与页面设计，以及 D2 技术验证入口**：保留可导航的 React 页面、53 个接口契约与共享类型；整合模型结构化输出、只读搜索及内嵌 Mem0 存储检索的独立验证命令。D3 已补充服务端 Session 登录、当前身份及退出接口，并接通前端登录、刷新恢复身份和退出；业务接口已统一校验会话、当前角色以及写入 Origin/CSRF。D4 已实现[任务创建与详情闭环](docs/infra/tasks.md)：前端真实提交、幂等重试、创建后跳转详情及刷新/重新打开恢复数据库状态，支持同团队成员查看和未绑定账号，创建不自动执行。任务列表已接通数据库、同团队历史、状态筛选、搜索和游标分页；其他业务页面仍为预览；已接通模拟执行的启动、停止、重试、步骤和尝试历史；澄清答复和同尝试继续执行也已接通；真实 Agent、输入语义检查、成员与配置管理、业务记忆治理、审批与发布尚未完成，Agent 的 `canExecuteTasks` 继续为 `false`。
+当前已实现任务创建、澄清、文案生成、结构化审核和最多三轮自动修改，以及人工接管、编辑重审、主观裁决、调整要求新执行和终止。支持 mock 验收与 agent 真实模型模式；详见[文案审核说明](docs/infra/content-review.md)。实际微博发布仍未接入。
 
-接口和页面交付见 [D1 设计索引](docs/design/README.md)。登录后访问 `/tasks/new` 创建真实任务，成功跳转 `/tasks/:taskId`；`/tasks` 为真实任务列表，演示详情单独位于 `/previews/tasks/:taskId`。访问 `/api/v1/openapi.json` 读取契约；业务路由先校验会话与角色（未登录 `401`、越权 `403`），写入还校验 Origin/CSRF。认证、创建任务、列表、详情及模拟执行/历史接口已实现，其余业务处理返回 `501 NOT_IMPLEMENTED`，预览页面明确标注示例数据。`/` 保留真实连接检测。
+接口和页面交付见 [D1 设计索引](docs/design/README.md)。登录后访问 `/tasks/new` 创建真实任务，成功跳转 `/tasks/:taskId`；`/tasks` 为真实任务列表，演示详情单独位于 `/previews/tasks/:taskId`。访问 `/api/v1/openapi.json` 读取契约；业务路由先校验会话与角色（未登录 `401`、越权 `403`），写入还校验 Origin/CSRF。认证、任务、文案版本、审核、人工处理与历史接口已实现，其余业务处理返回 `501 NOT_IMPLEMENTED`，预览页面明确标注示例数据。`/` 保留真实连接检测。
 
 最终七项技术基线见[技术选型](docs/architecture/stack-decisions.md)：Session / ops_session / 8 小时、DeepSeek + Claude Agent SDK、WebSearch/WebFetch、Drizzle + pg + SQL 迁移、进程内 Mem0 OSS、OpenAI 1536 维嵌入、同实例独立记忆库。业务 Memory Manager 尚未实现。
 
 D3 已补充业务表结构与初始 SQL 迁移，支持空库初始化、已有同构表核对接管和增量升级。使用步骤见[数据库迁移说明](backend/drizzle/README.md)；首个成员使用[管理员初始化脚本](docs/infra/admin-bootstrap.md)，认证接口配置及限制见[Session 认证说明](docs/infra/auth.md)。
 
 D2 尚未全部完成；Langfuse 按项目安排延后至主要业务流程完成后接入，微博能力仍待核查。当前技术验证记录及边界见 [D2 状态记录](docs/architecture/d2-status.md)。原始整合记录见 [2026-10-27 整合记录](docs/architecture/local-integration-2026-10-27.md)，本次选型修订见 [2026-10-28 统一记录](docs/architecture/selection-alignment-2026-10-28.md)。
+
+> 已有 PostgreSQL 占用 5432 时，在 `.env` 设置 `DATABASE_MODE=external` 复用原库；旧迁移分支的验证与升级见[数据库兼容说明](docs/infra/database-recovery.md)。
 
 ## 环境前提
 
@@ -43,7 +45,7 @@ cd multi-agent-ops
    npm run db:migrate
    ```
 
-   `env:setup` 自动创建 `.env` 和随机本地数据库密码，启动数据库并等待健康检查；重复执行不覆盖已有 `.env`。`db:migrate` 创建所需业务表，不插入账号或示例数据，不调用真实模型。若数据库已手动建表，先按[迁移说明](backend/drizzle/README.md)备份并执行 `db:baseline`。
+   `env:setup` 自动创建 `.env`、随机本地数据库密码和登录密钥，然后按数据库模式启动容器或检查现有连接。重复执行保留已有配置，只为缺少或留空 `AUTH_SECRET` 的开发环境补齐密钥；已有密钥保持不变，补齐后重启后端。生产密钥须通过秘密配置提供。`db:migrate` 创建所需业务表，不插入账号或示例数据，不调用真实模型。若数据库已手动建表，先按[迁移说明](backend/drizzle/README.md)备份并执行 `db:baseline`。
 
 3. 启动三部分：
 
@@ -51,7 +53,7 @@ cd multi-agent-ops
    npm run dev
    ```
 
-打开 **http://127.0.0.1:5173**。页面应显示后端、Agent 空壳、数据库均“已连接”。在终端按 Ctrl+C 停止开发服务；数据库独立运行，可用 `npm run db:down` 停止，持久卷保留。
+打开 **http://127.0.0.1:5173**。页面应显示后端、Agent、数据库均“已连接”。在终端按 Ctrl+C 停止开发服务；数据库独立运行，可用 `npm run db:down` 停止，持久卷保留。
 
 **只看空壳：** `npm install && npm run dev` 可以不经 setup 启动界面与两个服务入口；数据库会如实显示“待配置”或“未连接”。这不等于数据库环境验收通过。
 
@@ -74,24 +76,24 @@ tests/e2e/      真实前后端联调的浏览器冒烟测试
 
 ## 常用命令
 
-| 命令                                      | 用途                                                     |
-| ----------------------------------------- | -------------------------------------------------------- |
-| `npm run dev`                             | 启动共享契约监听、前端、后端和 Agent 空壳                |
-| `npm run check`                           | 契约漂移、格式、Lint、类型、后端/Agent 测试和所有包构建  |
-| `npm run contract:generate`               | 从共享定义生成请求/响应类型及逐项接口参考                |
-| `npm run format`                          | 统一格式                                                 |
-| `npm run env:setup`                       | 首次生成本地环境并启动数据库                             |
-| `npm run db:up` / `npm run db:down`       | 启停数据库，不删除持久卷                                 |
-| `npm run db:check`                        | 检查数据库连接和临时表读写                               |
-| `npm run db:generate -- --name=变更名`    | 从表定义生成待评审的 SQL 迁移与快照                      |
-| `npm run db:migrate`                      | 将尚未应用的 SQL 迁移执行到业务库                        |
-| `npm run db:baseline`                     | 核对手动建好的表并登记初始版本，保留已有数据             |
-| `npm run db:adopt`                        | 核对已手动执行的 D4 字段变更并登记增量迁移               |
-| `npm run tasks:test`                      | 使用显式配置的独立临时库验证创建任务接口                 |
-| `npm run db:status`                       | 查看已应用及待应用迁移数量                               |
-| `npm run db:test`                         | 在独立临时数据库中验证迁移、接管、约束和数据保留         |
-| `npm exec -- playwright install chromium` | 安装本机浏览器测试依赖                                   |
-| `npm run test:e2e`                        | 启动并验证真实前后端及 Agent 空壳；CI 额外要求数据库就绪 |
+| 命令                                      | 用途                                                    |
+| ----------------------------------------- | ------------------------------------------------------- |
+| `npm run dev`                             | 启动共享契约监听、前端、后端和 Agent                    |
+| `npm run check`                           | 契约漂移、格式、Lint、类型、后端/Agent 测试和所有包构建 |
+| `npm run contract:generate`               | 从共享定义生成请求/响应类型及逐项接口参考               |
+| `npm run format`                          | 统一格式                                                |
+| `npm run env:setup`                       | 首次生成本地环境并启动数据库                            |
+| `npm run db:up` / `npm run db:down`       | 启停数据库，不删除持久卷                                |
+| `npm run db:check`                        | 检查数据库连接和临时表读写                              |
+| `npm run db:generate -- --name=变更名`    | 从表定义生成待评审的 SQL 迁移与快照                     |
+| `npm run db:migrate`                      | 将尚未应用的 SQL 迁移执行到业务库                       |
+| `npm run db:baseline`                     | 核对手动建好的表并登记初始版本，保留已有数据            |
+| `npm run db:adopt`                        | 核对已手动执行的 D4 字段变更并登记增量迁移              |
+| `npm run tasks:test`                      | 使用显式配置的独立临时库验证创建任务接口                |
+| `npm run db:status`                       | 查看已应用及待应用迁移数量                              |
+| `npm run db:test`                         | 在独立临时数据库中验证迁移、接管、约束和数据保留        |
+| `npm exec -- playwright install chromium` | 安装本机浏览器测试依赖                                  |
+| `npm run test:e2e`                        | 启动并验证真实前后端及 Agent；CI 额外要求数据库就绪     |
 
 后端入口：`GET /api/health`（存活）、`GET /api/ready`（数据库就绪，失败为 503）、`GET /api/agent-health`（Agent 探测）。Agent 入口：`GET /health`。开发服务默认仅监听本机，不是生产部署方案。
 

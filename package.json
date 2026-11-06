@@ -26,7 +26,7 @@
     "format:check": "prettier --check .",
     "test": "npm run build --workspace=shared && npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
-    "check": "npm run contract:check && npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "check": "npm run contract:check && npm run format:check && npm run lint && npm run typecheck && npm run infra:test && npm test && npm run build",
     "env:setup": "node scripts/setup.mjs",
     "model:verify": "npm run model:verify --workspace=agent --",
     "search:verify": "npm run search:verify --workspace=agent --",
@@ -41,7 +41,8 @@
     "db:adopt": "node scripts/migrations.mjs adopt",
     "db:status": "node scripts/migrations.mjs status",
     "db:test": "node --test scripts/migrations.test.mjs",
-    "memory:check": "node scripts/check-memory-database.mjs"
+    "memory:check": "node scripts/check-memory-database.mjs",
+    "infra:test": "node --test scripts/database-mode.test.mjs scripts/legacy-workflow.test.mjs scripts/local-env.test.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

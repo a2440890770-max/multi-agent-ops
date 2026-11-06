@@ -11,10 +11,11 @@ export interface ServiceHealth {
 }
 export interface AgentHealth extends ServiceHealth {
   service: 'agent';
-  mode: 'shell';
-  canExecuteTasks: false;
+  mode: 'shell' | 'workflow';
+  canExecuteTasks: boolean;
 }
 export interface DatabaseReadiness {
   status: 'ready' | 'not_ready';
   database: 'connected' | 'unconfigured' | 'unavailable';
 }
+export * from './workflow.js';

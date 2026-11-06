@@ -18,13 +18,9 @@ Session 响应使用现有 `{ data: { member, permissions, csrfToken, expiresAt 
 - `AUTH_TRUSTED_ORIGINS`：逗号分隔的精确 Origin。开发默认接受 localhost 和 127.0.0.1 的 5173/3001 端口；其他来源须显式指定。禁止通配符、路径和内嵌凭据。
 - 生产必须设置 `NODE_ENV=production`、随机 `AUTH_SECRET` 和 HTTPS `AUTH_TRUSTED_ORIGINS`，使用同源 HTTPS。生产 Cookie 为 `HttpOnly; Secure; SameSite=Lax; Path=/`；开发仅允许本机 HTTP。
 
-未配置认证密钥时，健康接口仍可启动；登录返回 503，不创建模拟会话。部署密钥请通过秘密配置注入。可在本机生成并安全保存：
+开发环境运行 `npm run env:setup` 会在本地 `.env` 中生成持久的随机登录密钥；已有文件缺少或留空 `AUTH_SECRET` 时也会补齐，已有有效密钥和其他配置保持不变，密钥不会输出到终端。配置补齐后重启后端，再在登录页点击“重新检查登录状态”。生产环境不自动生成密钥，须通过秘密配置注入。
 
-```sh
-node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"
-```
-
-该命令的输出是秘密，不应贴到公开日志或提交仓库。
+未配置认证密钥时，健康接口仍可启动；登录返回 503，不创建模拟会话。浏览器携带旧 Cookie 检查身份也会返回 503，登录页显示“登录服务暂不可用”。请先确认密钥已配置并重启后端。
 
 ## 会话、重放与限流
 

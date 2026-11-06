@@ -324,7 +324,7 @@ test('创建遵循已有 201 契约，原文、创建人、团队、固定账号
   assert.equal(data.actions.start.allowed, true);
   assert.ok(
     Object.entries(data.actions)
-      .filter(([name]) => name !== 'start')
+      .filter(([name]) => !['start', 'save', 'terminate'].includes(name))
       .every(([, a]) => !a.allowed && a.reason),
   );
   const row = (await client.query('SELECT * FROM tasks WHERE id=$1', [data.task.id])).rows[0];
@@ -860,7 +860,7 @@ test('详情投影持久化执行状态和错误，兼容原型 needs_human 状�
     assert.equal(response.json().data.actions.start.allowed, status === null);
     assert.ok(
       Object.entries(response.json().data.actions)
-        .filter(([name]) => name !== 'start')
+        .filter(([name]) => !['start', 'save', 'terminate'].includes(name))
         .every(([, action]) => !action.allowed),
     );
   }
@@ -1711,4 +1711,582 @@ test('澄清审计失败回滚答复与排队状态，恢复后原动作键可�
     await client.query('DROP FUNCTION clarification_audit_failure()');
   }
   assert.equal((await clarify(identity, data, { key })).statusCode, 202);
+});
+
+// D5: content/review workflow acceptance and adversarial concurrency checks.
+function contentCommand(identity, taskId, path, payload, options = {}) {
+  return app.inject({
+    method: 'POST',
+    url: `/api/v1/tasks/${taskId}/${path}`,
+    payload,
+    headers: { origin, 'idempotency-key': options.key ?? randomUUID(), ...identity },
+  });
+}
+async function runToEnd(identity, id, worker, max = 40) {
+  for (let i = 0; i < max; i++) {
+    const data = (await detail(identity, id)).json().data;
+    if (!data.workLock) return data;
+    now = new Date(now.getTime() + 1000);
+    await worker.tick();
+  }
+  assert.fail('workflow did not reach a terminal checkpoint');
+}
+async function createStarted(identity, scenario = 'success') {
+  const id = (await create(identity)).json().data.task.id;
+  const response = await execute(identity, id, 'start', {
+    expectedRevision: 1,
+    simulationScenario: scenario,
+  });
+  assert.equal(response.statusCode, 202, response.body);
+  return id;
+}
+const passingReview = {
+  outcome: 'pass',
+  checks: ['任务符合度', '事实证据'],
+  suggestions: [],
+  scores: [{ name: '综合', value: 99 }],
+  blockingIssues: [],
+  factualEvidenceSufficient: true,
+  hasFactualClaims: false,
+  facts: [],
+};
+function useAgentTasks() {
+  return application({
+    tasks: new TaskService(database.db, () => new Date(now), { executorMode: 'agent' }),
+  });
+}
+
+test('持续审核不通过：严格保存初稿加3个修改版本、4次对应审核，重建和双执行器不能越界', async () => {
+  const identity = await login(),
+    id = await createStarted(identity, 'review_failure');
+  let worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+  await advance(worker, 5);
+  const reserved = (await detail(identity, id)).json().data;
+  assert.equal(reserved.currentAttempt.autoRevisionCount, 1);
+  assert.equal(reserved.currentContent.revisionRound, 0);
+  worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+  const end = await runToEnd(identity, id, worker);
+  assert.equal(end.execution, 'manual_required');
+  assert.equal(end.currentAttempt.autoRevisionCount, 3);
+  assert.equal(end.workLock, null);
+  const records = (await history(identity, id)).json().data;
+  assert.deepEqual(
+    records.contents.map((c) => c.revisionRound),
+    [0, 1, 2, 3],
+  );
+  assert.equal(records.reviews.length, 4);
+  assert.equal(records.steps.length, 10);
+  assert.equal(new Set(records.steps.map((s) => s.id)).size, 10);
+  for (const c of records.contents) {
+    const reviews = records.reviews.filter((r) => r.currentVersionId === c.id);
+    assert.equal(reviews.length, 1);
+    assert.equal(reviews[0].records[0].contentVersionId, c.id);
+    assert.equal(reviews[0].records[0].outcome, 'changes_required');
+  }
+  assert.ok(
+    records.contents.slice(1).every((c, i) => c.parentVersionId === records.contents[i].id),
+  );
+  now = new Date(now.getTime() + 120000);
+  assert.deepEqual(await Promise.all([worker.tick(), new MockTaskExecutor(database.db).tick()]), [
+    false,
+    false,
+  ]);
+  assert.equal((await history(identity, id)).json().data.contents.length, 4);
+});
+
+test('高分不能覆盖事实证据不足，裁决也不能放行 factual 阻断', async () => {
+  const identity = await login(),
+    id = await createStarted(identity, 'factual_failure');
+  const end = await runToEnd(
+    identity,
+    id,
+    new MockTaskExecutor(database.db, { now: () => new Date(now) }),
+  );
+  assert.equal(end.execution, 'manual_required');
+  const record = end.currentReview.records[0];
+  assert.equal(record.scores[0].value, 99);
+  assert.equal(record.factualEvidenceSufficient, false);
+  assert.ok(record.blockingIssues.some((i) => i.kind === 'factual'));
+  const response = await contentCommand(identity, id, `reviews/${end.currentReview.id}/decisions`, {
+    expectedRevision: end.task.revision,
+    contentVersionId: end.currentContent.id,
+    reviewRecordId: record.id,
+    reason: '高分也不能放行',
+    acceptedIssues: record.blockingIssues.map((i) => i.id),
+    unresolvedIssues: [],
+    evidenceIds: [],
+  });
+  assert.equal(response.statusCode, 422, response.body);
+  assert.equal(response.json().error.code, 'REVIEW_BLOCKED');
+  assert.equal((await history(identity, id)).json().data.contents.length, 4);
+});
+
+test('人工编辑先基础校验；重审只审当前人工版，不改正文、不清零额度，历史保持不可变', async () => {
+  const identity = await login(),
+    id = await createStarted(identity, 'review_failure');
+  const worker = new MockTaskExecutor(database.db, { now: () => new Date(now) });
+  let state = await runToEnd(identity, id, worker);
+  const original = (await history(identity, id)).json().data;
+  const saveBody = {
+    expectedRevision: state.task.revision,
+    baseContentVersionId: state.currentContent.id,
+    body: 'x'.repeat(2001),
+  };
+  const key = randomUUID();
+  const saved = await contentCommand(identity, id, 'content-versions', saveBody, { key });
+  assert.equal(saved.statusCode, 201, saved.body);
+  assert.equal(
+    (await contentCommand(identity, id, 'content-versions', saveBody, { key })).json().meta
+      .replayed,
+    true,
+  );
+  state = saved.json().data.task;
+  assert.ok(state.errorMessage.includes('2000'));
+  assert.equal(state.currentReview, null);
+  assert.equal(state.currentContent.sourceKind, 'manual');
+  let response = await contentCommand(identity, id, 'reviews', {
+    expectedRevision: state.task.revision,
+    contentVersionId: state.currentContent.id,
+  });
+  assert.equal(response.statusCode, 202, response.body);
+  state = await runToEnd(identity, id, worker);
+  assert.equal(state.execution, 'manual_required');
+  assert.ok(state.currentReview.records[0].blockingIssues.some((i) => i.kind === 'deterministic'));
+  response = await contentCommand(identity, id, 'content-versions', {
+    expectedRevision: state.task.revision,
+    baseContentVersionId: state.currentContent.id,
+    body: '人工编辑：今天也来分享生活的小发现吧！',
+  });
+  assert.equal(response.statusCode, 201, response.body);
+  state = response.json().data.task;
+  assert.equal(state.errorMessage, null);
+  assert.equal(state.actions.review.allowed, true);
+  await contentCommand(identity, id, 'reviews', {
+    expectedRevision: state.task.revision,
+    contentVersionId: state.currentContent.id,
+  });
+  state = await runToEnd(identity, id, worker);
+  assert.equal(state.execution, 'ready'); // Manual review uses an independent cycle and does not rewrite the text.
+  assert.equal(state.currentAttempt.autoRevisionCount, 3);
+  assert.equal(state.currentContent.body, '人工编辑：今天也来分享生活的小发现吧！');
+  const after = (await history(identity, id)).json().data;
+  assert.deepEqual(after.contents.slice(0, 4), original.contents);
+  assert.deepEqual(after.reviews.slice(0, 4), original.reviews);
+  assert.equal(after.contents.length, 6);
+  assert.equal(after.reviews.length, 6);
+});
+
+test('主观裁决完整记录接受与保留的意见，不改旧审核；终止后可调整要求显式新执行', async () => {
+  const identity = await login(),
+    id = await createStarted(identity, 'review_failure');
+  let state = await runToEnd(
+    identity,
+    id,
+    new MockTaskExecutor(database.db, { now: () => new Date(now) }),
+  );
+  const cycle = state.currentReview,
+    record = cycle.records[0];
+  const body = {
+    expectedRevision: state.task.revision,
+    contentVersionId: state.currentContent.id,
+    reviewRecordId: record.id,
+    reason: '人工认为此表达适合当前受众',
+    acceptedIssues: record.blockingIssues.map((i) => i.id),
+    unresolvedIssues: [],
+    evidenceIds: [],
+  };
+  assert.equal(
+    (
+      await contentCommand(identity, id, `reviews/${cycle.id}/decisions`, {
+        ...body,
+        unresolvedIssues: body.acceptedIssues,
+      })
+    ).statusCode,
+    400,
+  );
+  const decision = await contentCommand(identity, id, `reviews/${cycle.id}/decisions`, body);
+  assert.equal(decision.statusCode, 201, decision.body);
+  state = decision.json().data.task;
+  assert.equal(state.execution, 'ready');
+  assert.deepEqual(state.currentReview, cycle);
+  const records = (await history(identity, id)).json().data;
+  assert.equal(records.decisions.length, 1);
+  const terminated = await contentCommand(identity, id, 'terminate', {
+    expectedRevision: state.task.revision,
+    reason: '调整目标后重新执行',
+  });
+  assert.equal(terminated.statusCode, 202, terminated.body);
+  state = terminated.json().data;
+  assert.equal(state.task.lifecycle, 'terminated');
+  assert.equal(
+    (
+      await contentCommand(identity, id, 'content-versions', {
+        expectedRevision: state.task.revision,
+        baseContentVersionId: state.currentContent.id,
+        body: '禁止',
+      })
+    ).statusCode,
+    409,
+  );
+  const restarted = await execute(identity, id, 'retry', {
+    expectedRevision: state.task.revision,
+    previousAttemptId: state.currentAttempt.id,
+    restartTerminated: true,
+    reason: '新的创作目标',
+    originalRequest: '只写一条生活感想，不包含事实断言。',
+  });
+  assert.equal(restarted.statusCode, 202, restarted.body);
+  assert.equal(restarted.json().data.currentAttempt.autoRevisionCount, 0);
+  assert.equal(restarted.json().data.task.originalRequest, '只写一条生活感想，不包含事实断言。');
+  assert.equal(restarted.json().data.currentReview, null);
+  assert.equal((await history(identity, id)).json().data.attempts[1].autoRevisionCount, 3);
+});
+
+test('技术重试复用修改轮次；同轮调用失败后重建执行器，最终仍只有4版4审', async () => {
+  await app.close();
+  app = useAgentTasks();
+  const identity = await login(),
+    id = await createStarted(identity);
+  const calls = new Map();
+  const provider = {
+    generate: async (input) => {
+      const n = (calls.get(input.round) ?? 0) + 1;
+      calls.set(input.round, n);
+      if (input.round === 2 && n === 1) throw new Error('temporary network error');
+      return { body: `第 ${input.round} 轮微博` };
+    },
+    review: async () => ({
+      ...passingReview,
+      outcome: 'changes_required',
+      suggestions: ['改善表达'],
+      blockingIssues: [{ kind: 'subjective', message: '仍需修改' }],
+    }),
+  };
+  const first = new MockTaskExecutor(database.db, { now: () => new Date(now), provider });
+  await advance(first, 8); // draft/review, revision1/review, revision2 fails once
+  let state = (await detail(identity, id)).json().data;
+  assert.equal(state.currentAttempt.autoRevisionCount, 2);
+  assert.equal(state.currentContent.revisionRound, 1);
+  const end = await runToEnd(
+    identity,
+    id,
+    new MockTaskExecutor(database.db, { now: () => new Date(now), provider }),
+  );
+  assert.equal(end.currentAttempt.autoRevisionCount, 3);
+  assert.equal(calls.get(2), 2);
+  const records = (await history(identity, id)).json().data;
+  assert.equal(records.contents.length, 4);
+  assert.equal(records.reviews.length, 4);
+  assert.equal(
+    records.audit.items.filter((a) => a.action === 'workflow.technical_retry').length,
+    1,
+  );
+});
+
+test('人工接管编辑时，迟到的自动生成结果不能覆盖人工版本或恢复旧审核', async () => {
+  await app.close();
+  app = useAgentTasks();
+  const identity = await login(),
+    id = await createStarted(identity);
+  let resolve, started;
+  const entered = new Promise((r) => {
+    started = r;
+  });
+  const provider = {
+    generate: async () => {
+      started();
+      return new Promise((r) => {
+        resolve = r;
+      });
+    },
+    review: async () => passingReview,
+  };
+  const worker = new MockTaskExecutor(database.db, { now: () => new Date(now), provider });
+  await advance(worker, 3);
+  now = new Date(now.getTime() + 1000);
+  const late = worker.tick();
+  await entered;
+  let state = (await detail(identity, id)).json().data;
+  assert.equal(
+    (
+      await contentCommand(identity, id, 'content-versions', {
+        expectedRevision: state.task.revision,
+        baseContentVersionId: null,
+        body: '不得越过工作锁',
+      })
+    ).statusCode,
+    423,
+  );
+  const stopped = await execute(
+    identity,
+    id,
+    'stop',
+    { expectedRevision: state.task.revision, reason: '人工接管' },
+    { attemptId: state.currentAttempt.id },
+  );
+  assert.equal(stopped.statusCode, 202, stopped.body);
+  state = stopped.json().data;
+  const saved = await contentCommand(identity, id, 'content-versions', {
+    expectedRevision: state.task.revision,
+    baseContentVersionId: null,
+    body: '这是人工版本，不能被覆盖',
+  });
+  assert.equal(saved.statusCode, 201, saved.body);
+  resolve({ body: '迟到的自动结果' });
+  await late;
+  state = (await detail(identity, id)).json().data;
+  assert.equal(state.currentContent.body, '这是人工版本，不能被覆盖');
+  assert.equal(state.currentReview, null);
+  assert.equal((await history(identity, id)).json().data.contents.length, 1);
+  assert.equal(await worker.tick(), false);
+});
+
+test('人工重审运行中禁止编辑；停止重审后保存新版本，迟到的审核结果被隔离', async () => {
+  await app.close();
+  app = useAgentTasks();
+  const identity = await login(),
+    id = await createStarted(identity);
+  const provider = {
+    generate: async () => ({ body: '初始正文' }),
+    review: async () => passingReview,
+  };
+  const worker = new MockTaskExecutor(database.db, { now: () => new Date(now), provider });
+  let state = await runToEnd(identity, id, worker);
+  const saved = await contentCommand(identity, id, 'content-versions', {
+    expectedRevision: state.task.revision,
+    baseContentVersionId: state.currentContent.id,
+    body: '人工版一',
+  });
+  state = saved.json().data.task;
+  const submitted = await contentCommand(identity, id, 'reviews', {
+    expectedRevision: state.task.revision,
+    contentVersionId: state.currentContent.id,
+  });
+  assert.equal(submitted.statusCode, 202, submitted.body);
+  const cycleId = submitted.json().data.id;
+  let resolve, started;
+  const entered = new Promise((r) => {
+    started = r;
+  });
+  provider.review = async () => {
+    started();
+    return new Promise((r) => {
+      resolve = r;
+    });
+  };
+  const late = worker.tick();
+  await entered;
+  state = (await detail(identity, id)).json().data;
+  assert.equal(state.workLock.ownerType, 'manual_review');
+  assert.equal(
+    (
+      await execute(identity, id, 'retry', {
+        expectedRevision: state.task.revision,
+        previousAttemptId: state.currentAttempt.id,
+        restartTerminated: false,
+        reason: '不能绕过审核锁',
+      })
+    ).statusCode,
+    423,
+  );
+  const stopped = await contentCommand(identity, id, `reviews/${cycleId}/stop`, {
+    expectedRevision: state.task.revision,
+    reason: '停止审核编辑',
+  });
+  assert.equal(stopped.statusCode, 202, stopped.body);
+  state = stopped.json().data;
+  const newVersion = await contentCommand(identity, id, 'content-versions', {
+    expectedRevision: state.task.revision,
+    baseContentVersionId: state.currentContent.id,
+    body: '人工版二',
+  });
+  assert.equal(newVersion.statusCode, 201, newVersion.body);
+  resolve(passingReview);
+  await late;
+  state = (await detail(identity, id)).json().data;
+  assert.equal(state.currentContent.body, '人工版二');
+  assert.equal(state.currentReview, null);
+  const records = (await history(identity, id)).json().data;
+  assert.equal(records.reviews.find((c) => c.id === cycleId).status, 'cancelled');
+  assert.equal(records.reviews.find((c) => c.id === cycleId).records.length, 0);
+});
+
+test('数据库拒绝同尝试返还修改额度与修改历史文案、终态审核和裁决', async () => {
+  const identity = await login(),
+    id = await createStarted(identity, 'review_failure');
+  const state = await runToEnd(
+    identity,
+    id,
+    new MockTaskExecutor(database.db, { now: () => new Date(now) }),
+  );
+  await assert.rejects(
+    client.query('UPDATE execution_attempts SET auto_revision_count=0 WHERE id=$1', [
+      state.currentAttempt.id,
+    ]),
+    /cannot be reset/,
+  );
+  await assert.rejects(
+    client.query('UPDATE task_contents SET body=body WHERE id=$1', [state.currentContent.id]),
+    /immutable/,
+  );
+  await assert.rejects(
+    client.query('UPDATE workflow_review_cycles SET records=records WHERE id=$1', [
+      state.currentReview.id,
+    ]),
+    /immutable/,
+  );
+});
+
+test('自动审核在途人工接管后，迟到的高分通过结果不能覆盖人工版资格', async () => {
+  await app.close();
+  app = useAgentTasks();
+  const identity = await login(),
+    id = await createStarted(identity);
+  let resolve, started;
+  const entered = new Promise((r) => {
+    started = r;
+  });
+  const provider = {
+    generate: async () => ({ body: '自动初稿' }),
+    review: async () => {
+      started();
+      return new Promise((r) => {
+        resolve = r;
+      });
+    },
+  };
+  const worker = new MockTaskExecutor(database.db, { now: () => new Date(now), provider });
+  await advance(worker, 4);
+  now = new Date(now.getTime() + 1000);
+  const late = worker.tick();
+  await entered;
+  let state = (await detail(identity, id)).json().data;
+  assert.equal(state.currentReview.status, 'running');
+  const oldCycleId = state.currentReview.id;
+  state = (
+    await execute(
+      identity,
+      id,
+      'stop',
+      { expectedRevision: state.task.revision, reason: '接管审核中的初稿' },
+      { attemptId: state.currentAttempt.id },
+    )
+  ).json().data;
+  const saved = await contentCommand(identity, id, 'content-versions', {
+    expectedRevision: state.task.revision,
+    baseContentVersionId: state.currentContent.id,
+    body: '新的人工编辑版本',
+  });
+  assert.equal(saved.statusCode, 201, saved.body);
+  resolve(passingReview);
+  await late;
+  state = (await detail(identity, id)).json().data;
+  assert.equal(state.currentContent.body, '新的人工编辑版本');
+  assert.equal(state.currentReview, null);
+  assert.equal(
+    (await history(identity, id)).json().data.reviews.find((c) => c.id === oldCycleId).status,
+    'cancelled',
+  );
+});
+
+test('租约过期重建可接续同一步骤，旧租约结果无法新增第二份初稿', async () => {
+  await app.close();
+  app = useAgentTasks();
+  const identity = await login(),
+    id = await createStarted(identity);
+  let resolve, started;
+  const entered = new Promise((r) => {
+    started = r;
+  });
+  const stuck = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    provider: {
+      generate: async () => {
+        started();
+        return new Promise((r) => {
+          resolve = r;
+        });
+      },
+      review: async () => passingReview,
+    },
+  });
+  await advance(stuck, 3);
+  now = new Date(now.getTime() + 1000);
+  const late = stuck.tick();
+  await entered;
+  now = new Date(now.getTime() + 91000);
+  const recovery = new MockTaskExecutor(database.db, {
+    now: () => new Date(now),
+    provider: {
+      generate: async () => ({ body: '恢复执行生成的初稿' }),
+      review: async () => passingReview,
+    },
+  });
+  assert.equal(await recovery.tick(), true);
+  resolve({ body: '旧租约的迟到初稿' });
+  await late;
+  const state = await runToEnd(identity, id, recovery);
+  assert.equal(state.currentContent.body, '恢复执行生成的初稿');
+  assert.equal(state.currentAttempt.autoRevisionCount, 0);
+  assert.equal((await history(identity, id)).json().data.contents.length, 1);
+});
+
+test('旧执行器停在审核且尚未产出时，升级后恢复同一次初稿生成，不另建尝试或返还额度', async () => {
+  const identity = await login(),
+    id = await createStarted(identity);
+  const attempt = (await detail(identity, id)).json().data.currentAttempt;
+  await client.query(
+    "UPDATE execution_attempts SET status='running',started_at=$1,current_step='模拟检查产出',next_run_at=$1 WHERE id=$2",
+    [now, attempt.id],
+  );
+  await client.query(
+    "UPDATE execution_steps SET status=CASE WHEN ordinal=3 THEN 'running' ELSE 'completed' END,started_at=$1,finished_at=CASE WHEN ordinal=3 THEN NULL ELSE $1::timestamptz END WHERE attempt_id=$2",
+    [now, attempt.id],
+  );
+  await client.query(
+    "UPDATE tasks SET execution_status='running',current_step='模拟检查产出' WHERE id=$1",
+    [id],
+  );
+  const end = await runToEnd(
+    identity,
+    id,
+    new MockTaskExecutor(database.db, { now: () => new Date(now) }),
+  );
+  assert.equal(end.execution, 'ready');
+  assert.equal(end.currentAttempt.id, attempt.id);
+  assert.equal(end.currentAttempt.autoRevisionCount, 0);
+  const records = (await history(identity, id)).json().data;
+  assert.equal(records.attempts.length, 1);
+  assert.equal(records.contents.length, 1);
+  assert.equal(records.reviews.length, 1);
+});
+
+test('并发领取在锁内重读最新尝试和到期时间，不会提前跨步骤或重复预留修改轮次', async () => {
+  const identity = await login();
+  for (let n = 0; n < 3; n++) {
+    const id = await createStarted(identity, 'review_failure');
+    const workers = Array.from(
+      { length: 12 },
+      () => new MockTaskExecutor(database.db, { now: () => new Date(now) }),
+    );
+    for (let tick = 0; tick < 11; tick++) {
+      now = new Date(now.getTime() + 1000);
+      const results = await Promise.all(workers.map((worker) => worker.tick()));
+      assert.equal(
+        results.filter(Boolean).length,
+        1,
+        `wave ${tick}: each due transition is claimed once`,
+      );
+    }
+    const current = (await detail(identity, id)).json().data;
+    assert.equal(current.execution, 'manual_required');
+    assert.equal(current.currentAttempt.autoRevisionCount, 3);
+    const rows = (await history(identity, id)).json().data;
+    assert.deepEqual(
+      rows.contents.map((c) => c.revisionRound),
+      [0, 1, 2, 3],
+    );
+    assert.equal(rows.reviews.length, 4);
+    assert.ok((await Promise.all(workers.map((worker) => worker.tick()))).every((value) => !value));
+  }
 });

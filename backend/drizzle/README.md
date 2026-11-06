@@ -80,3 +80,11 @@ npm run check
 `0003_d4_execution_attempts.sql` 增量新增执行尝试、步骤、模拟产出以及任务当前引用/工作代次，并关联任务审计。只新增结构和审计关联，不启动或重置已有任务。按正常 `npm run db:migrate` 应用；不手动修改旧迁移或重复建表。接口和本地模拟模式见 [任务说明](../../docs/infra/tasks.md)。
 
 `0004_d4_clarification_answers.sql` 新增澄清答复记录表，通过任务/尝试复合外键和同问题唯一约束关联答复。应用后支持当前待澄清尝试继续执行，不会自动启动或改写已有任务。
+
+### 文案与审核闭环
+
+`0005_content_review_workflow.sql` 增加多版本、审核周期、人工裁决及调用租约。`0006_workflow_integrity.sql` 补齐版本关联、旧产出链接和历史不可变/额度单调约束。按正常迁移流程应用，不自动启动任务。见[文案审核说明](../../docs/infra/content-review.md)。
+
+### 已有人工审核分支
+
+保留原 `0005/0006` 的 SQL 哈希；`0007_workflow_namespace.sql` 隔离新审核表名。已发布 `0005_manual_editorial` 采用受限、逐项核对的独立兼容增量，原历史记录不改写。见[数据库兼容说明](../../docs/infra/database-recovery.md)。

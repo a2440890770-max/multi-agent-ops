@@ -17,7 +17,16 @@ export function registerContractRoutes(
   auth: AuthService | undefined,
   tasks?: Pick<
     TaskService,
-    'create' | 'get' | 'list' | 'start' | 'retry' | 'stop' | 'history' | 'clarify'
+    | 'create'
+    | 'get'
+    | 'list'
+    | 'start'
+    | 'retry'
+    | 'stop'
+    | 'history'
+    | 'clarify'
+    | 'contentCommand'
+    | 'versions'
   >,
 ) {
   app.get('/api/v1/openapi.json', async () => getOpenApiDocument());
@@ -104,6 +113,47 @@ export function registerContractRoutes(
               data: result.data,
               meta: { requestId: request.id, replayed: result.replayed },
             });
+          }
+          if (
+            ['saveContent', 'submitReview', 'decideReview', 'stopReview', 'terminateTask'].includes(
+              endpoint.operationId,
+            )
+          ) {
+            if (!tasks)
+              throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '文案审核服务尚未配置。');
+            if (!request.authSession) throw new AuthError(401, 'UNAUTHENTICATED', '请重新登录。');
+            const params = request.params as { taskId: string; reviewId?: string };
+            const result = await tasks.contentCommand({
+              kind: endpoint.operationId as import('./task-content-service.js').ContentOperation,
+              ...params,
+              body: request.body as OperationBodies[import('./task-content-service.js').ContentOperation],
+              actor: request.authSession.member,
+              key: request.headers['idempotency-key'] as string,
+              requestId: request.id,
+            });
+            return reply.code(endpoint.success).send({
+              data: result.data,
+              meta: { requestId: request.id, replayed: result.replayed },
+            });
+          }
+          if (
+            ['listContent', 'getContent', 'listReviews', 'getReview'].includes(endpoint.operationId)
+          ) {
+            if (!tasks)
+              throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '文案审核服务尚未配置。');
+            if (!request.authSession) throw new AuthError(401, 'UNAUTHENTICATED', '请重新登录。');
+            const params = request.params as {
+              taskId: string;
+              versionId?: string;
+              reviewId?: string;
+            };
+            const data = await tasks.versions({
+              ...params,
+              ...(request.query as { cursor?: string; limit?: number }),
+              actor: request.authSession.member,
+              kind: endpoint.operationId.includes('Content') ? 'content' : 'review',
+            });
+            return { data, meta: { requestId: request.id, replayed: false } };
           }
           if (endpoint.operationId === 'listTasks') {
             if (!tasks)

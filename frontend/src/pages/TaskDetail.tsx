@@ -5,6 +5,7 @@ import { useAuth } from '../auth.js';
 import { getTaskDetail, TaskRequestError } from '../task-api.js';
 import { approvalLabels, executionLabels, publicationLabels } from '../task-labels.js';
 import { TaskExecutionControls, TaskExecutionHistory } from './TaskExecution.js';
+import { TaskWorkflow } from './TaskWorkflow.js';
 import { TaskClarifications } from './TaskClarifications.js';
 
 type LoadState =
@@ -133,8 +134,14 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
           </div>
         ))}
       </div>
+      <nav className="task-section-links" aria-label="任务详情快捷入口">
+        <a href="#workflow-title">审核与人工处理</a>
+        <a href="#execution-history-title">每版文案、评分与建议</a>
+        <a href="#execution-controls-title">启动或重新执行</a>
+      </nav>
       <div className="content-grid task-grid">
         <div>
+          <TaskWorkflow key={task.id} detail={detail} onChanged={reload} />
           <section className="panel detail-panel" aria-labelledby="original-request-title">
             <h2 id="original-request-title">原始要求</h2>
             <div className="task-original" data-testid="original-request">
@@ -179,8 +186,11 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
           </section>
           {detail.currentContent && (
             <section className="panel detail-panel">
-              <h2>模拟产出</h2>
-              <Notice tone="warning">仅用于流程验证，不代表真实研究或审核结果。</Notice>
+              <h2>当前文案 · V{detail.currentContent.versionNo}</h2>
+              {detail.currentAttempt?.executorMode === 'mock' &&
+                detail.currentContent.sourceKind === 'agent' && (
+                  <Notice tone="warning">模拟文案，仅用于验证流程。</Notice>
+                )}
               <div className="task-original" data-testid="mock-output">
                 {detail.currentContent.body}
               </div>
@@ -230,7 +240,7 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
           </section>
           <section className="panel detail-panel">
             <h2>后续操作</h2>
-            <p className="muted">真实模型执行、审核和发布功能尚未接入。</p>
+            <p className="muted">审核通过后仍需人工处理；发布功能尚未接入。</p>
             <div className="button-row">
               <button disabled>发布内容</button>
             </div>

@@ -1,6 +1,6 @@
 # 接口逐项参考（生成文件）
 
-由 shared 契约生成；运行 `npm run contract:generate` 更新。通用权限、错误、超时与审计规则见 [接口契约说明](api-contract.md)。已实现登录、当前身份、退出、业务权限校验及 D4 创建草稿任务、同团队任务列表、筛选及详情查询；创建只保存输入，不自动执行；模拟执行的启动、停止、重试、历史及澄清答复/继续执行已实现，真实 Agent 及其他业务处理仍为 501 占位。
+由 shared 契约生成；运行 `npm run contract:generate` 更新。通用权限、错误、超时与审计规则见 [接口契约说明](api-contract.md)。已实现登录、当前身份、退出、业务权限校验及 D4 创建草稿任务、同团队任务列表、筛选及详情查询；创建只保存输入，不自动执行；已实现 mock/agent 文案生成、结构化审核与最多三轮自动修改、人工编辑重审/主观裁决、终止及调整要求新执行；发布和其他未实现业务仍为 501 占位。
 
 | 操作 ID               | 方法与路径                                                         | 用途                                                |
 | --------------------- | ------------------------------------------------------------------ | --------------------------------------------------- |
@@ -280,6 +280,7 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -350,6 +351,7 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -394,6 +396,9 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段                 | 类型                  | 含义                                                |
 | -------------------- | --------------------- | --------------------------------------------------- |
+| contents             | ContentVersion[]      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reviews              | ReviewCycle[]         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| decisions            | ManualDecision[]      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | attempts             | ExecutionAttempt[]    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | steps                | AgentStep[]           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | clarificationAnswers | ClarificationAnswer[] | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -431,6 +436,7 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -460,7 +466,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。尚无完整尝试且无遗留执行状态；D4 仅模拟执行，无账号也可验证；simulationScenario 默认 success，可选 failure/clarification；输入及模拟器 v1 配置冻结，计数=0；创建 queued 尝试和步骤，清空当前产出。
+前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。尚无完整尝试且无遗留执行状态；支持 mock/agent 执行；模拟情形包含持续审核不通过和高分事实不足；输入配置冻结，计数=0，初稿后最多三轮自动修改；创建 queued 尝试和步骤，清空当前产出。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -468,15 +474,16 @@ JSON 请求体（未列字段拒绝）：
 
 JSON 请求体（未列字段拒绝）：
 
-| 字段               | 必填 | 类型                                    | 校验                          |
-| ------------------ | ---- | --------------------------------------- | ----------------------------- |
-| expectedRevision   | 是   | integer                                 | 最小 1；最大 9007199254740991 |
-| simulationScenario | 否   | "success" / "failure" / "clarification" | 见业务前置条件                |
+| 字段               | 必填 | 类型                                                                           | 校验                          |
+| ------------------ | ---- | ------------------------------------------------------------------------------ | ----------------------------- |
+| expectedRevision   | 是   | integer                                                                        | 最小 1；最大 9007199254740991 |
+| simulationScenario | 否   | "success" / "failure" / "clarification" / "review_failure" / "factual_failure" | 见业务前置条件                |
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -506,7 +513,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：当前模拟尝试待澄清/queued/running，任务 open；模拟执行无外部调用，在同一事务记录取消、隔离旧 generation 并确认停止后解锁；任务仍 open。真实执行的异步停止尚未实现。
+前置条件与业务校验：当前尝试待澄清/queued/running，任务 open；同一事务记录取消并隔离 generation 及在途结果后解锁供人工编辑；任务仍 open。
 
 路径字段：`taskId`、`attemptId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -523,6 +530,7 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -552,7 +560,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：D4 仅开放任务的模拟重试，restartTerminated 必须 false；previousAttemptId 匹配当前已结束尝试，无工作槽；新 attemptNo，从头执行并保留旧记录；simulationScenario 默认 success，可选 failure/clarification；已终止任务的重启后续实现。
+前置条件与业务校验：用户显式新执行；previousAttemptId 匹配当前已结束尝试，无工作槽；可调整 originalRequest；terminated 须 restartTerminated=true；新 attemptNo 额度从零开始，旧额度历史保留。技术重试仍复用原尝试与轮次。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -560,18 +568,20 @@ JSON 请求体（未列字段拒绝）：
 
 JSON 请求体（未列字段拒绝）：
 
-| 字段               | 必填 | 类型                                    | 校验                                    |
-| ------------------ | ---- | --------------------------------------- | --------------------------------------- |
-| expectedRevision   | 是   | integer                                 | 最小 1；最大 9007199254740991           |
-| previousAttemptId  | 是   | string / null                           | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
-| restartTerminated  | 是   | boolean                                 | 见业务前置条件                          |
-| reason             | 是   | string                                  | 最短 1；最长 2000                       |
-| simulationScenario | 否   | "success" / "failure" / "clarification" | 见业务前置条件                          |
+| 字段               | 必填 | 类型                                                                           | 校验                                    |
+| ------------------ | ---- | ------------------------------------------------------------------------------ | --------------------------------------- |
+| expectedRevision   | 是   | integer                                                                        | 最小 1；最大 9007199254740991           |
+| previousAttemptId  | 是   | string / null                                                                  | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
+| restartTerminated  | 是   | boolean                                                                        | 见业务前置条件                          |
+| reason             | 是   | string                                                                         | 最短 1；最长 2000                       |
+| originalRequest    | 否   | string                                                                         | 最短 1；最长 10000                      |
+| simulationScenario | 否   | "success" / "failure" / "clarification" / "review_failure" / "factual_failure" | 见业务前置条件                          |
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -618,6 +628,7 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -665,6 +676,7 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -741,6 +753,7 @@ JSON 请求体（未列字段拒绝）：
 | contentHash     | string             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | sourceKind      | "agent" / "manual" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | revisionRoundId | null / string      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| revisionRound   | number             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | sourceRefs      | SourceRef[]        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | usedMemoryRefs  | MemoryRef[]        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | createdBy       | string             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -823,7 +836,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前人工版；原子取得 manual_review 工作槽，冻结版本；只审核不重写，不重置三轮计数；当前已完成通过周期返回已有结果。
+前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。当前已保存版；原子取得 manual_review 工作槽，冻结版本；只审核不重写，不重置三轮计数；当前已完成通过周期返回已有结果。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -947,6 +960,7 @@ JSON 请求体（未列字段拒绝）：
 
 | 字段               | 类型                                                                                                          | 含义                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| executorMode       | "disabled" / "mock" / "agent"                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |

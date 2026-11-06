@@ -1,11 +1,16 @@
-import type { AgentStep, ContentVersion, ExecutionAttempt } from '@multi-agent-ops/shared';
-import { executionAttempts, executionSteps, taskContents } from './schema.js';
+import type {
+  AgentStep,
+  ContentVersion,
+  ExecutionAttempt,
+  ReviewCycle,
+} from '@multi-agent-ops/shared';
+import { executionAttempts, executionSteps, taskContents, reviewCycles } from './schema.js';
 
-export const mockStages = [
+export const workflowStages = [
   { role: 'supervisor', label: '检查原始要求' },
-  { role: 'research', label: '模拟研究资料' },
-  { role: 'content', label: '模拟生成文案' },
-  { role: 'review', label: '模拟检查产出' },
+  { role: 'research', label: '整理输入资料' },
+  { role: 'content', label: '生成微博文案' },
+  { role: 'review', label: '结构化审核' },
 ] as const;
 export const activeAttempt = (status: string) =>
   ['queued', 'running', 'awaiting_clarification'].includes(status);
@@ -40,12 +45,13 @@ export function contentModel(row: typeof taskContents.$inferSelect): ContentVers
     id: row.id,
     taskId: row.taskId,
     originAttemptId: row.originAttemptId,
-    parentVersionId: null,
+    parentVersionId: row.parentVersionId,
     versionNo: row.versionNo,
     body: row.body,
     contentHash: row.contentHash,
-    sourceKind: 'agent',
+    sourceKind: row.sourceKind,
     revisionRoundId: null,
+    revisionRound: row.revisionRound,
     sourceRefs: [],
     usedMemoryRefs: [],
     createdBy: row.createdBy,
@@ -62,11 +68,31 @@ export function stepModel(row: typeof executionSteps.$inferSelect, outputId?: st
     status: row.status,
     inputVersionRefs: [],
     outputVersionRefs:
-      row.role === 'content' && row.status === 'completed' && outputId ? [outputId] : [],
+      row.role === 'content' && row.status === 'completed' && (row.outputContentId ?? outputId)
+        ? [row.outputContentId ?? outputId!]
+        : [],
     sourceRefs: [],
     usedMemoryRefs: [],
     durationMs: row.durationMs,
     error: row.error,
     traceUrl: null,
+  };
+}
+
+export function reviewModel(row: typeof reviewCycles.$inferSelect): ReviewCycle {
+  return {
+    id: row.id,
+    taskId: row.taskId,
+    attemptId: row.attemptId,
+    trigger: row.trigger,
+    inputVersionId: row.inputVersionId,
+    currentVersionId: row.currentVersionId,
+    status: row.status,
+    records: row.records,
+    requestedBy: row.requestedBy,
+    configVersion: row.configVersion,
+    createdAt: row.createdAt.toISOString(),
+    finishedAt: row.finishedAt?.toISOString() ?? null,
+    error: row.error,
   };
 }

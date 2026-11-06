@@ -467,4 +467,113 @@ test.describe('隔离数据库上的真实创建与详情闭环', () => {
       (await client.query('SELECT count(*)::int AS n FROM execution_attempts')).rows[0].n,
     ).toBe(1);
   });
+  test('连续审核失败展示四版四审；人工编辑刷新不丢失，保存后只审核人工版', async ({ page }) => {
+    await openForm(page);
+    await page.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(page).toHaveURL(/\/tasks\/[a-f0-9-]{36}$/);
+    const id = new URL(page.url()).pathname.split('/').at(-1)!;
+    await page.getByLabel('模拟情形').selectOption('review_failure');
+    await page.getByRole('button', { name: '启动模拟执行', exact: true }).click();
+    await expect(page.locator('.status-strip')).toContainText('待人工处理', { timeout: 20000 });
+    await expect(page.getByTestId('content-version')).toHaveCount(4);
+    await expect(
+      page.getByText('本次自动修改：3 / 3。人工编辑重审不会恢复自动修改额度。'),
+    ).toBeVisible();
+    const count = await client.query(
+      'SELECT count(*)::int AS n FROM workflow_review_cycles WHERE task_id=$1',
+      [id],
+    );
+    expect(count.rows[0].n).toBe(4);
+    await page.getByRole('button', { name: '编辑文案', exact: true }).click();
+    const editor = page.getByLabel('人工编辑文案', { exact: true });
+    await editor.fill('人工修改后的微博，今天也要发现生活的美好！');
+    await page.getByRole('button', { name: '刷新详情', exact: true }).click();
+    await expect(editor).toHaveValue('人工修改后的微博，今天也要发现生活的美好！');
+    await page.getByRole('button', { name: '保存人工版本', exact: true }).click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId('content-version')).toHaveCount(5);
+    await page.getByRole('button', { name: '提交当前版本重审', exact: true }).click();
+    await expect(page.locator('.status-strip')).toContainText('产出就绪', { timeout: 15000 });
+    const row = (await client.query('SELECT * FROM execution_attempts WHERE task_id=$1', [id]))
+      .rows[0];
+    expect(row.auto_revision_count).toBe(3);
+    const text = (
+      await client.query(
+        'SELECT * FROM task_contents WHERE task_id=$1 ORDER BY version_no DESC LIMIT 1',
+        [id],
+      )
+    ).rows[0];
+    expect(text.body).toBe('人工修改后的微博，今天也要发现生活的美好！');
+    expect(text.source_kind).toBe('manual');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await page.screenshot({ path: 'test-results/content-review-mobile.png', fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.screenshot({ path: 'test-results/content-review-desktop.png', fullPage: true });
+  });
+
+  test('99分但事实不足停止在四版，页面禁止主观裁决放行', async ({ page }) => {
+    await openForm(page);
+    await page.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(page).toHaveURL(/\/tasks\/[a-f0-9-]{36}$/);
+    const id = new URL(page.url()).pathname.split('/').at(-1)!;
+    await page.getByLabel('模拟情形').selectOption('factual_failure');
+    await page.getByRole('button', { name: '启动模拟执行', exact: true }).click();
+    await expect(page.locator('.status-strip')).toContainText('待人工处理', { timeout: 20000 });
+    await expect(page.getByTestId('content-version')).toHaveCount(4);
+    const panel = page.getByRole('region', { name: '审核与人工处理' });
+    await expect(panel).toContainText('99/100');
+    await expect(panel).toContainText('事实证据：不足');
+    await expect(panel.getByRole('button', { name: '记录人工裁决', exact: true })).toHaveCount(0);
+    await expect
+      .poll(
+        async () =>
+          (
+            await client.query(
+              'SELECT auto_revision_count FROM execution_attempts WHERE task_id=$1',
+              [id],
+            )
+          ).rows[0].auto_revision_count,
+      )
+      .toBe(3);
+  });
+  test('人工主观裁决、调整要求新执行和终止操作真实保存', async ({ page }) => {
+    await openForm(page);
+    await page.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(page).toHaveURL(/\/tasks\/[a-f0-9-]{36}$/);
+    const id = new URL(page.url()).pathname.split('/').at(-1)!;
+    await page.getByLabel('模拟情形').selectOption('review_failure');
+    await page.getByRole('button', { name: '启动模拟执行', exact: true }).click();
+    await expect(page.locator('.status-strip')).toContainText('待人工处理', { timeout: 20000 });
+    await page.getByRole('checkbox').check();
+    await page.getByLabel('操作或裁决原因').fill('运营人员确认当前表达适合受众');
+    await page.getByRole('button', { name: '记录人工裁决', exact: true }).click();
+    await expect(page.locator('.status-strip')).toContainText('产出就绪');
+    expect(
+      (
+        await client.query(
+          'SELECT count(*)::int AS n FROM workflow_manual_decisions WHERE task_id=$1',
+          [id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    await page.getByRole('button', { name: '调整要求并新执行', exact: true }).click();
+    await page.getByLabel('新执行要求').fill('新要求：只写生活感想，不含产品事实。');
+    await page.getByRole('button', { name: '保存要求并开始新执行', exact: true }).click();
+    await expect(page.getByTestId('original-request')).toHaveText(
+      '新要求：只写生活感想，不含产品事实。',
+    );
+    await expect(page.getByTestId('execution-attempt')).toHaveCount(2);
+    await page.getByLabel('操作或裁决原因').fill('本次任务终止');
+    await page.getByRole('button', { name: '终止任务', exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await client.query('SELECT lifecycle FROM tasks WHERE id=$1', [id])).rows[0].lifecycle,
+      )
+      .toBe('terminated');
+    await expect(page.getByRole('button', { name: '终止任务', exact: true })).toBeDisabled();
+  });
 });

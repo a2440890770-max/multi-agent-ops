@@ -1,3 +1,5 @@
+> 文案生成、Review 和人工处理已在现有流程上实现，最新范围与边界见[文案审核说明](content-review.md)。本文保留原 D4 接口背景。
+
 # 任务创建与详情查询接口
 
 沿用现有契约 `POST /api/v1/tasks`，admin 和 operator 均可创建。需要有效的 `ops_session` Cookie、可信 `Origin`、会话绑定的 `X-CSRF-Token` 和 16—128 字符 `Idempotency-Key`。先应用增量迁移：`npm run db:migrate`。

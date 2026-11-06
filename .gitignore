@@ -11,3 +11,6 @@ test-results/
 *.log
 artifacts/model/
 artifacts/memory/
+
+# Database backups contain credentials and business content.
+artifacts/database/

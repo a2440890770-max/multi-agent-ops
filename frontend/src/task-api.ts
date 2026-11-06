@@ -41,7 +41,9 @@ function validAttempt(value: unknown): value is ExecutionAttempt {
     Number(value.attemptNo) >= 1 &&
     ['mock', 'agent'].includes(value.executorMode as string) &&
     (value.simulationScenario === null ||
-      ['success', 'failure', 'clarification'].includes(value.simulationScenario as string)) &&
+      ['success', 'failure', 'clarification', 'review_failure', 'factual_failure'].includes(
+        value.simulationScenario as string,
+      )) &&
     [
       'queued',
       'running',
@@ -303,4 +305,39 @@ export async function getTaskHistory(taskId: string, signal: AbortSignal) {
       nullableText(value.audit.nextCursor),
   );
   return result.data;
+}
+
+export type ContentCommand =
+  | { kind: 'saveContent'; body: OperationBodies['saveContent'] }
+  | { kind: 'submitReview'; body: OperationBodies['submitReview'] }
+  | { kind: 'terminateTask'; body: OperationBodies['terminateTask'] }
+  | { kind: 'stopReview'; reviewId: string; body: OperationBodies['stopReview'] }
+  | { kind: 'decideReview'; reviewId: string; body: OperationBodies['decideReview'] };
+export function runContentCommand(
+  taskId: string,
+  command: ContentCommand,
+  csrf: string,
+  key: string,
+) {
+  const base = `/api/v1/tasks/${encodeURIComponent(taskId)}`;
+  const path =
+    command.kind === 'saveContent'
+      ? `${base}/content-versions`
+      : command.kind === 'submitReview'
+        ? `${base}/reviews`
+        : command.kind === 'terminateTask'
+          ? `${base}/terminate`
+          : command.kind === 'stopReview'
+            ? `${base}/reviews/${encodeURIComponent(command.reviewId)}/stop`
+            : `${base}/reviews/${encodeURIComponent(command.reviewId)}/decisions`;
+  return request(
+    path,
+    {
+      body: command.body,
+      csrf,
+      key,
+      successStatus: ['saveContent', 'decideReview'].includes(command.kind) ? 201 : 202,
+    },
+    (v): v is Record<string, unknown> => object(v),
+  );
 }

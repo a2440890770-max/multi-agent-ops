@@ -60,6 +60,9 @@ export interface ResponseModels {
   BlindItem: { item: BlindItem | null; remaining: number };
   BlindScore: { id: string; itemId: string; submittedAt: string };
   History: {
+    contents: ContentVersion[];
+    reviews: ReviewCycle[];
+    decisions: ManualDecision[];
     attempts: ExecutionAttempt[];
     steps: AgentStep[];
     clarificationAnswers: ClarificationAnswer[];

@@ -117,7 +117,8 @@ export interface ExecutionAttempt {
   autoRevisionCount: number;
   configVersion: number;
   executorMode: 'mock' | 'agent';
-  simulationScenario: 'success' | 'failure' | 'clarification' | null;
+  simulationScenario:
+    'success' | 'failure' | 'clarification' | 'review_failure' | 'factual_failure' | null;
   requestedBy: Id;
   createdAt: Timestamp;
   cancelScope: 'stop_attempt' | 'terminate_task' | null;
@@ -140,6 +141,7 @@ export interface ContentVersion {
   contentHash: string;
   sourceKind: 'agent' | 'manual';
   revisionRoundId: Id | null;
+  revisionRound?: number;
   sourceRefs: SourceRef[];
   usedMemoryRefs: MemoryRef[];
   createdBy: Id;
@@ -157,6 +159,9 @@ export interface ReviewRecord {
   contentVersionId: Id;
   outcome: ReviewOutcome;
   checks: string[];
+  suggestions?: string[];
+  factualEvidenceSufficient?: boolean;
+  factChecks?: { claim: string; sourceId: string; quote: string }[];
   blockingIssues: ReviewIssue[];
   scores: { name: string; value: number; source: 'model' | 'human' | 'rule' }[];
   sourceRefs: SourceRef[];
@@ -363,6 +368,7 @@ export interface TaskSummary {
   currentStep: string | null;
 }
 export interface TaskDetail extends TaskSummary {
+  executorMode?: 'mock' | 'agent' | 'disabled';
   errorMessage: string | null;
   currentAttempt: ExecutionAttempt | null;
   currentContent: ContentVersion | null;

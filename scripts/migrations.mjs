@@ -2,6 +2,12 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import pg from 'pg';
+import { isCompatibleMigration, verifyCompatibleMigration } from './compatible-migrations.mjs';
+import {
+  isLegacyManualMigration,
+  legacyMigrationPlan,
+  verifyLegacyBeforeBridge,
+} from './legacy-workflow-migrations.mjs';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { loadEnvironment, safeError } from './postgres-admin.mjs';
 import { businessTables, firstDifference, inspectBusinessSchema } from './migration-catalog.mjs';
@@ -41,7 +47,7 @@ function validateHistory(history, migrations) {
     const file = migrations[i];
     if (!file || row.hash !== file.hash || Number(row.created_at) !== file.folderMillis)
       throw new Error(
-        '迁移历史与本地 SQL 不一致；请恢复原迁移文件或使用对应版本的源码，禁止覆盖已应用的迁移。',
+        `迁移历史与本地 SQL 不一致（第 ${i + 1} 条，数据库时间 ${row.created_at}，本地时间 ${file?.folderMillis ?? '无对应版本'}）；请恢复原迁移文件或使用对应版本源码，禁止覆盖已应用的迁移。`,
       );
   }
 }
@@ -58,20 +64,37 @@ async function createLedger(client) {
 export async function runMigrations(client, action, folder = migrationsFolder) {
   if (!['migrate', 'baseline', 'adopt', 'status'].includes(action))
     throw new Error('只支持 migrate / baseline / adopt / status。');
-  const migrations = readMigrationFiles({ migrationsFolder: folder });
+  let migrations = readMigrationFiles({ migrationsFolder: folder });
   if (!migrations.length) throw new Error('没有可应用的 SQL 迁移。');
   await client.query('BEGIN');
   try {
     await client.query("SET LOCAL lock_timeout = '5s'");
     await client.query('SET LOCAL search_path = public, pg_catalog');
     await client.query('SELECT pg_advisory_xact_lock(1835100527, 168101)');
-    const history = await readHistory(client);
+    const recorded = await readHistory(client);
+    const compatible = recorded.filter(isCompatibleMigration);
+    const history = recorded.filter((row) => !isCompatibleMigration(row));
+    const legacy = compatible.length > 0 || history.some(isLegacyManualMigration);
+    let bridge;
+    if (legacy) {
+      if (compatible.length > 1 || !history.length)
+        throw new Error('兼容迁移记录重复或缺少业务基线，拒绝升级。');
+      const plan = await legacyMigrationPlan(migrations, folder);
+      migrations = plan.migrations;
+      bridge = plan.bridge;
+    }
     validateHistory(history, migrations);
+    if (compatible.length) await verifyCompatibleMigration(client);
+    const lineage = legacy
+      ? { lineage: 'manual_editorial', retainedCompatible: compatible.length }
+      : {};
     if (action === 'status') {
       await client.query('COMMIT');
-      return { applied: history.length, pending: migrations.length - history.length };
+      return { applied: history.length, pending: migrations.length - history.length, ...lineage };
     }
     if (action === 'adopt') {
+      if (legacy)
+        throw new Error('已知旧分支只支持 db:migrate/db:status，不允许通过接管改写历史。');
       if (!history.length) throw new Error('请先核对并登记初始基线，再接管增量迁移。');
       if (history.length === migrations.length) {
         await client.query('COMMIT');
@@ -135,6 +158,7 @@ export async function runMigrations(client, action, folder = migrationsFolder) {
     }
     await createLedger(client);
     for (const migration of migrations.slice(history.length)) {
+      if (migration === bridge) await verifyLegacyBeforeBridge(client, folder);
       for (const statement of migration.sql) if (statement.trim()) await client.query(statement);
       await client.query(`INSERT INTO ${ledger} (hash, created_at) VALUES ($1, $2)`, [
         migration.hash,
@@ -142,7 +166,7 @@ export async function runMigrations(client, action, folder = migrationsFolder) {
       ]);
     }
     await client.query('COMMIT');
-    return { applied: migrations.length - history.length, pending: 0 };
+    return { applied: migrations.length - history.length, pending: 0, ...lineage };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

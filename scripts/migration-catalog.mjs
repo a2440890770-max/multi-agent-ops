@@ -25,9 +25,9 @@ export function normalizeConstraintDefinition(definition) {
     .replace(new RegExp(`\\((${literal})::character varying\\)::text`, 'g'), '$1::text');
 }
 
-export async function inspectBusinessSchema(client) {
+export async function inspectBusinessSchema(client, tables = businessTables) {
   const result = {};
-  for (const name of businessTables) {
+  for (const name of tables) {
     const table = await client.query(
       `SELECT relkind, relrowsecurity, relforcerowsecurity
        FROM pg_class WHERE oid=to_regclass($1)`,
@@ -45,10 +45,12 @@ export async function inspectBusinessSchema(client) {
        ORDER BY a.attnum`,
       [`public.${name}`],
     );
+    // NOT NULL is already compared in columns.attnotnull; PG18 additionally
+    // exposes it in pg_constraint. Keep the catalog comparable with PG16.
     const constraints = await client.query(
       `SELECT conname AS name, contype AS type, pg_get_constraintdef(oid) AS definition,
          condeferrable AS deferrable, condeferred AS deferred, convalidated AS validated
-       FROM pg_constraint WHERE conrelid=to_regclass($1) ORDER BY conname`,
+       FROM pg_constraint WHERE conrelid=to_regclass($1) AND contype <> 'n' ORDER BY conname`,
       [`public.${name}`],
     );
     const indexes = await client.query(

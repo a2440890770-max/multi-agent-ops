@@ -236,7 +236,11 @@ test('数据库真实执行唯一性、外键、检查约束、默认过期时�
     c.query('UPDATE accounts SET current_config_version=2 WHERE id=$1', [account]),
     { code: '23503' },
   );
-  await assert.rejects(c.query('DELETE FROM teams WHERE id=$1', [team]), { code: '23503' });
+  await assert.rejects(
+    c.query('DELETE FROM teams WHERE id=$1', [team]),
+    (error) =>
+      ['23503', '23001'].includes(error.code) && error.constraint === 'accounts_team_id_fkey',
+  );
   await assert.rejects(c.query('UPDATE config_versions SET max_auto_revisions=4'), {
     code: '23514',
   });
@@ -493,7 +497,10 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
   await runAllMigrations(c, 'migrate');
   const { account } = await seed(c);
   const before = (await c.query('SELECT * FROM tasks')).rows;
-  assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 3, pending: 0 });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), {
+    applied: readMigrationFiles({ migrationsFolder }).length - 2,
+    pending: 0,
+  });
   assert.deepEqual(
     (await c.query('SELECT * FROM tasks')).rows,
     before.map((row) => ({
@@ -504,6 +511,10 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
       revision: 1,
       current_attempt_id: null,
       current_content_version_id: null,
+      workflow_review_cycle_id: null,
+      terminated_by: null,
+      terminated_at: null,
+      termination_reason: null,
       work_generation: 0,
     })),
   );
@@ -532,4 +543,203 @@ test('创建草稿迁移保留旧任务，新增任务无执行状态，账号�
   const fingerprint = await dataFingerprint(c);
   assert.deepEqual(await runLatestMigrations(c, 'migrate'), { applied: 0, pending: 0 });
   assert.deepEqual(await dataFingerprint(c), fingerprint);
+});
+
+async function installLegacyManual(client, t) {
+  const folder = await mkdtemp(join(tmpdir(), 'ops-legacy-manual-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  await cp(migrationsFolder, folder, { recursive: true });
+  const file = join(folder, 'meta/_journal.json');
+  const journal = JSON.parse(await readFile(file, 'utf8'));
+  journal.entries = journal.entries.slice(0, 5);
+  await writeFile(file, JSON.stringify(journal));
+  await runLatestMigrations(client, 'migrate', folder);
+  const seeded = await seed(client);
+  const { legacyManualMigration } = await import('./legacy-workflow-migrations.mjs');
+  const sql = await readFile(join(migrationsFolder, 'compat/0005_manual_editorial.sql'), 'utf8');
+  for (const statement of sql.split('--> statement-breakpoint'))
+    if (statement.trim()) await client.query(statement);
+  await client.query('INSERT INTO drizzle.__drizzle_migrations(hash,created_at) VALUES($1,$2)', [
+    legacyManualMigration.hash,
+    legacyManualMigration.createdAt,
+  ]);
+  return seeded;
+}
+async function originalDataSnapshot(client) {
+  const tables = (
+    await client.query(
+      "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename",
+    )
+  ).rows.map((r) => r.tablename);
+  const snapshots = [];
+  for (const table of tables) {
+    const columns = (
+      await client.query(
+        'SELECT attname FROM pg_attribute WHERE attrelid=to_regclass($1) AND attnum>0 AND NOT attisdropped ORDER BY attnum',
+        ['public.' + table],
+      )
+    ).rows
+      .map((r) => '"' + r.attname + '"')
+      .join(',');
+    const sql = `SELECT md5(coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id)::text,'')) AS hash FROM (SELECT ${columns} FROM "${table}") r`;
+    snapshots.push({ sql, hash: (await client.query(sql)).rows[0].hash });
+  }
+  return snapshots;
+}
+
+test('已发布的人工审核分支使用独立增量升级，原数据和迁移记录不改写', async (t) => {
+  const c = await database(t);
+  await installLegacyManual(c, t);
+  const before = await originalDataSnapshot(c);
+  const history = (
+    await c.query('SELECT id,hash,created_at FROM drizzle.__drizzle_migrations ORDER BY id')
+  ).rows;
+  assert.deepEqual(await runLatestMigrations(c, 'status'), {
+    applied: 6,
+    pending: 1,
+    lineage: 'manual_editorial',
+    retainedCompatible: 0,
+  });
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), {
+    applied: 1,
+    pending: 0,
+    lineage: 'manual_editorial',
+    retainedCompatible: 0,
+  });
+  for (const snapshot of before)
+    assert.equal((await c.query(snapshot.sql)).rows[0].hash, snapshot.hash);
+  assert.deepEqual(
+    (
+      await c.query(
+        'SELECT id,hash,created_at FROM drizzle.__drizzle_migrations ORDER BY id LIMIT 6',
+      )
+    ).rows,
+    history,
+  );
+  for (const table of [
+    'workflow_review_cycles',
+    'workflow_manual_decisions',
+    'task_review_cycles',
+    'task_review_decisions',
+    'task_version_approvals',
+  ])
+    assert.ok((await c.query('SELECT to_regclass($1) AS name', [table])).rows[0].name);
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), {
+    applied: 0,
+    pending: 0,
+    lineage: 'manual_editorial',
+    retainedCompatible: 0,
+  });
+  const mainline = readMigrationFiles({ migrationsFolder });
+  for (const migration of mainline.slice(5, 8))
+    assert.equal(
+      (
+        await c.query('SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations WHERE hash=$1', [
+          migration.hash,
+        ])
+      ).rows[0].n,
+      0,
+    );
+});
+
+test('旧分支结构偏差拒绝升级，不创建新表或追加迁移记录', async (t) => {
+  const c = await database(t);
+  await installLegacyManual(c, t);
+  await c.query('ALTER TABLE execution_steps ADD COLUMN unexpected text');
+  const history = (await c.query('SELECT * FROM drizzle.__drizzle_migrations ORDER BY id')).rows;
+  await assert.rejects(runLatestMigrations(c, 'migrate'), /旧分支结构存在差异/);
+  assert.deepEqual(
+    (await c.query('SELECT * FROM drizzle.__drizzle_migrations ORDER BY id')).rows,
+    history,
+  );
+  assert.equal(
+    (await c.query("SELECT to_regclass('workflow_review_cycles') AS name")).rows[0].name,
+    null,
+  );
+});
+
+test('旧分支时间戳相同但 SQL 哈希不同不能通过兼容路径', async (t) => {
+  const c = await database(t);
+  await installLegacyManual(c, t);
+  await c.query(
+    "UPDATE drizzle.__drizzle_migrations SET hash='modified-manual-sql' WHERE created_at=$1",
+    [1793351546786],
+  );
+  await assert.rejects(runLatestMigrations(c, 'migrate'), /迁移历史与本地 SQL 不一致/);
+  assert.equal(
+    (await c.query("SELECT to_regclass('workflow_review_cycles') AS name")).rows[0].name,
+    null,
+  );
+});
+
+test('独立旧审核表与已知分支记录完整保留，新表不会覆盖同名历史表', async (t) => {
+  const c = await database(t);
+  const seeded = await installLegacyManual(c, t);
+  const { editorialMigration } = await import('./compatible-migrations.mjs');
+  for (const sql of [
+    'CREATE TABLE content_approvals(id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE content_versions(id uuid NOT NULL,task_id uuid NOT NULL,version_no integer NOT NULL,parent_version_id uuid,data jsonb NOT NULL)',
+    'CREATE TABLE editorial_attempts(id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE editorial_tasks(id uuid NOT NULL,team_id uuid NOT NULL,account_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE manual_decisions(id uuid NOT NULL,task_id uuid NOT NULL,review_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE publication_operations(id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    'CREATE TABLE review_cycles(id uuid NOT NULL,task_id uuid NOT NULL,data jsonb NOT NULL)',
+    "CREATE FUNCTION keep_legacy_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'immutable'; END; $$",
+  ])
+    await c.query(sql);
+  for (const [table, name] of [
+    ['content_versions', 'content_versions_immutable'],
+    ['review_cycles', 'review_cycles_immutable'],
+    ['manual_decisions', 'manual_decisions_immutable'],
+    ['editorial_attempts', 'editorial_attempts_immutable'],
+    ['content_approvals', 'content_approvals_binding'],
+  ])
+    await c.query(
+      `CREATE TRIGGER ${name} BEFORE UPDATE OR DELETE ON ${table} FOR EACH ROW EXECUTE FUNCTION keep_legacy_history()`,
+    );
+  await c.query('INSERT INTO editorial_tasks VALUES(gen_random_uuid(),$1,$2,$3::jsonb)', [
+    seeded.team,
+    seeded.account,
+    JSON.stringify({ body: '原有分支内容，不得覆盖' }),
+  ]);
+  await c.query('INSERT INTO drizzle.__drizzle_migrations(hash,created_at) VALUES($1,$2)', [
+    editorialMigration.hash,
+    editorialMigration.createdAt,
+  ]);
+  const before = await originalDataSnapshot(c);
+  const count = (await c.query('SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations'))
+    .rows[0].n;
+  assert.deepEqual(await runLatestMigrations(c, 'migrate'), {
+    applied: 1,
+    pending: 0,
+    lineage: 'manual_editorial',
+    retainedCompatible: 1,
+  });
+  for (const snapshot of before)
+    assert.equal((await c.query(snapshot.sql)).rows[0].hash, snapshot.hash);
+  assert.equal(
+    (await c.query('SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations')).rows[0].n,
+    count + 1,
+  );
+  assert.equal(
+    (await c.query("SELECT data->>'body' AS body FROM editorial_tasks")).rows[0].body,
+    '原有分支内容，不得覆盖',
+  );
+  assert.deepEqual(await runLatestMigrations(c, 'status'), {
+    applied: 7,
+    pending: 0,
+    lineage: 'manual_editorial',
+    retainedCompatible: 1,
+  });
+});
+
+test('旧分支配置保护触发器被移除时拒绝兼容升级', async (t) => {
+  const c = await database(t);
+  await installLegacyManual(c, t);
+  await c.query('DROP TRIGGER config_versions_immutable ON config_versions');
+  await assert.rejects(runLatestMigrations(c, 'migrate'), /配置不可变保护/);
+  assert.equal(
+    (await c.query("SELECT to_regclass('workflow_review_cycles') AS name")).rows[0].name,
+    null,
+  );
 });

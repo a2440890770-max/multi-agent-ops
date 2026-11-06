@@ -27,7 +27,8 @@ export interface OperationBodies {
   };
   startTask: {
     expectedRevision: number;
-    simulationScenario?: 'success' | 'failure' | 'clarification';
+    simulationScenario?:
+      'success' | 'failure' | 'clarification' | 'review_failure' | 'factual_failure';
   };
   stopAttempt: { expectedRevision: number; reason: string };
   retryTask: {
@@ -35,7 +36,9 @@ export interface OperationBodies {
     previousAttemptId: string | null;
     restartTerminated: boolean;
     reason: string;
-    simulationScenario?: 'success' | 'failure' | 'clarification';
+    originalRequest?: string;
+    simulationScenario?:
+      'success' | 'failure' | 'clarification' | 'review_failure' | 'factual_failure';
   };
   terminateTask: { expectedRevision: number; reason: string };
   copyTask: { expectedRevision: number; sourceContentVersionId: string | null; title: string };
