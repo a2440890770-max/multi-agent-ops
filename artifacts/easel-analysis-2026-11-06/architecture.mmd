@@ -1,0 +1,28 @@
+flowchart TB
+    U[用户] --> UI[React Web 工作台]
+    U --> CLI[Python CLI: chat / skill]
+    UI <-->|REST / SSE| API[FastAPI 后端]
+    API --> CTX[请求上下文组装]
+    CLI --> CTX
+    POLICY[SOUL.md / AGENTS.md / 运行时说明] --> CTX
+    CTX --> SELECT{选择当前执行引擎}
+    SELECT --> OC[OpenClaw: Gateway HTTP / CLI]
+    SELECT --> NATIVE[Codex RPC / OpenCode ACP / 通用 ACP]
+    SELECT --> CHAT[仅聊天: 直接调用模型 API]
+    OC --> A[当前会话的一个 Easel Agent]
+    NATIVE --> A
+    A <-->|读取当前画像 / 确认后更新| PROFILE[profiles/画像名: 六维 Markdown]
+    CHAT --> TEXT[写作 / 分析 / 问答]
+    A <-->|按需读取| SKILL[Skill 规范与 references]
+    A --> FLOW[发现 → 策划 → 制作 → 发布 → 归因]
+    FLOW --> TOOLS[Python 脚本 / 浏览器 / FFmpeg / 媒体 API]
+    TOOLS <-->|采集 / 发布| PLAT[社交媒体平台]
+    TOOLS --> OUT[outputs/主题: 成品 / assets / manifest]
+    OUT --> FLOW
+    API -->|发布页与数据页也可直接调用| TOOLS
+    TOOLS --> DATA[发布日志 / 内容日历 / 指标快照]
+    DATA --> REVIEW[统计脚本计算 + 当前 Agent 解读]
+    REVIEW --> PROPOSE[提炼 1 至 3 条长期经验]
+    PROPOSE --> CONFIRM{用户确认}
+    CONFIRM -->|同意后 profile-manager 更新| PROFILE
+    CONFIRM -->|拒绝或忽略| KEEP[不写账号长期记忆]
