@@ -4,6 +4,7 @@ export * from './api.js';
 export * from './contracts.js';
 export type { ResponseModels } from './responses.js';
 export * from './generated/request-models.js';
+export * from './schemas/supervisor.js';
 export interface ServiceHealth {
   service: 'backend' | 'agent';
   status: 'ok';
