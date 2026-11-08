@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describeAgent } from './index.js';
+import { describeAgent } from './health.js';
 
 const envPath = fileURLToPath(new URL('../../.env', import.meta.url));
 if (existsSync(envPath)) process.loadEnvFile(envPath);
@@ -22,4 +22,9 @@ const server = createServer((request, response) => {
 server.listen(port, '127.0.0.1', () =>
   console.log(`Agent 空壳已启动：http://127.0.0.1:${port}/health；尚无任务执行能力。`),
 );
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => server.close());
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    // The watch runner's IPC channel can remain open after the HTTP server closes.
+    server.close(() => process.exit(0));
+  });
+}

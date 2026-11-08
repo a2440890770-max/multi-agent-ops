@@ -11,11 +11,22 @@ export const migrationsFolder = fileURLToPath(new URL('../backend/drizzle/', imp
 const ledger = 'drizzle.__drizzle_migrations';
 
 export function validateBusinessTarget(env) {
-  if (!env.DATABASE_URL) throw new Error('缺少业务 DATABASE_URL。');
-  const url = new URL(env.DATABASE_URL);
+  const variable = env.DATABASE_ADMIN_URL ? 'DATABASE_ADMIN_URL' : 'DATABASE_URL';
+  if (!env[variable]) throw new Error('缺少业务 DATABASE_ADMIN_URL 或 DATABASE_URL。');
+  const url = new URL(env[variable]);
   const database = decodeURIComponent(url.pathname.slice(1));
   if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !database)
-    throw new Error('DATABASE_URL 必须明确指定 PostgreSQL 业务数据库。');
+    throw new Error(`${variable} 必须明确指定 PostgreSQL 业务数据库。`);
+  if (env.DATABASE_ADMIN_URL && env.DATABASE_URL) {
+    const runtime = new URL(env.DATABASE_URL);
+    if (
+      !['postgres:', 'postgresql:'].includes(runtime.protocol) ||
+      runtime.hostname !== url.hostname ||
+      (runtime.port || '5432') !== (url.port || '5432') ||
+      decodeURIComponent(runtime.pathname.slice(1)) !== database
+    )
+      throw new Error('DATABASE_ADMIN_URL 与 DATABASE_URL 必须指向同一主机、端口和业务数据库。');
+  }
   const memoryName = env.MEM0_DATABASE_URL
     ? decodeURIComponent(new URL(env.MEM0_DATABASE_URL).pathname.slice(1))
     : null;

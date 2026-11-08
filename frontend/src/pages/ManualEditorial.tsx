@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type {
   ContentVersion,
   ManualDecision,
+  ReviewRecord,
   ResponseModels,
   ReviewCycle,
   TaskDetail,
@@ -28,6 +29,23 @@ type Action = {
 };
 const labels = { pass: '通过', changes_required: '需要修改', manual_required: '等待人工裁决' };
 const date = (at: string) => new Date(at).toLocaleString('zh-CN', { hour12: false });
+const issueLabel = (kind: 'deterministic' | 'factual' | 'subjective') =>
+  kind === 'subjective' ? '主观意见' : kind === 'factual' ? '事实证据问题' : '确定性阻断';
+
+function ReviewScores({ record }: { record: ReviewRecord }) {
+  const sources = { model: '模型评分', human: '人工评分', rule: '规则评分' };
+  if (!record.scores.length)
+    return <p className="muted">未评分；基础规则检查不提供内容质量分数。</p>;
+  return (
+    <ul aria-label="审核评分">
+      {record.scores.map((score, index) => (
+        <li key={`${score.name}:${score.source}:${index}`}>
+          {score.name}：{score.value}（{sources[score.source]}）
+        </li>
+      ))}
+    </ul>
+  );
+}
 function readDraft(key: string, detail: TaskDetail): Draft {
   try {
     const d = JSON.parse(sessionStorage.getItem(key) ?? 'null') as Draft;
@@ -417,6 +435,7 @@ export function ManualEditorial({
             {review.records.map((r) => (
               <div className="inset" key={r.id}>
                 <strong>{accepted ? '主观意见已裁决接受' : labels[r.outcome]}</strong>
+                <ReviewScores record={r} />
                 <ul>
                   {r.checks.map((c) => (
                     <li key={c}>{c}</li>
@@ -425,15 +444,14 @@ export function ManualEditorial({
                 {!r.blockingIssues.length && <p>基础检查通过，没有阻断项。</p>}
                 {r.blockingIssues.map((i) => (
                   <p key={i.id} data-testid="review-issue">
-                    <strong>{i.kind === 'subjective' ? '主观意见' : '确定性阻断'}</strong>：
-                    {i.message}
+                    <strong>{issueLabel(i.kind)}</strong>：{i.message}
                   </p>
                 ))}
               </div>
             ))}
             {blocked && (
               <Notice tone="warning">
-                确定性阻断不能人工放行。请修改文案、保存新版本后重新审核。
+                确定性阻断与事实证据问题不能人工放行。请修改文案或补齐依据后保存新版本并重新审核。
               </Notice>
             )}
             {accepted && (
@@ -509,6 +527,37 @@ export function ManualEditorial({
             <small>
               {date(v.createdAt)} · {v.createdBy}
             </small>
+            <p className="muted">
+              {v.sourceKind === 'manual'
+                ? '人工编辑，不计入自动修改次数。'
+                : v.revisionRoundId
+                  ? `自动修改轮次编号：${v.revisionRoundId}`
+                  : '未记录自动修改轮次。'}
+            </p>
+            <details>
+              <summary>展开 V{v.versionNo} 文案与对应审核</summary>
+              <pre className="task-original">{v.body}</pre>
+              {reviews.flatMap((cycle) => cycle.records).filter((r) => r.contentVersionId === v.id)
+                .length === 0 && <p className="muted">该版本尚无审核记录。</p>}
+              {reviews
+                .flatMap((cycle) => cycle.records)
+                .filter((r) => r.contentVersionId === v.id)
+                .map((r, index) => (
+                  <div className="inset" key={r.id}>
+                    <strong>
+                      审核记录 {index + 1} · {labels[r.outcome]}
+                    </strong>
+                    <p className="muted">{date(r.createdAt)}</p>
+                    <ReviewScores record={r} />
+                    {r.blockingIssues.map((issue) => (
+                      <p key={issue.id}>
+                        {issueLabel(issue.kind)}：{issue.message}
+                      </p>
+                    ))}
+                    {!r.blockingIssues.length && <p>没有记录阻断意见。</p>}
+                  </div>
+                ))}
+            </details>
             <div className="button-row">
               <button
                 onClick={() => {
@@ -573,9 +622,12 @@ export function ManualEditorial({
               .flatMap((x) => x.blockingIssues)
               .map((i) => (
                 <p key={i.id}>
-                  {i.kind === 'subjective' ? '主观意见' : '确定性阻断'}：{i.message}
+                  {issueLabel(i.kind)}：{i.message}
                 </p>
               ))}
+            {r.records.map((record) => (
+              <ReviewScores key={record.id} record={record} />
+            ))}
             {(decisions[r.id] ?? []).map((d) => (
               <div className="inset" key={d.id} data-testid="decision-history">
                 <strong>裁决理由</strong>

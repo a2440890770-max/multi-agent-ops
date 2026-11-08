@@ -191,6 +191,33 @@ test('pg_dump 恢复时 CHECK 表达式的等价重解析仍能通过基线核�
   await assert.rejects(runMigrations(c, 'baseline'), /结构与初始迁移不一致/);
 });
 
+test('Windows 函数换行符允许登记基线，函数逻辑变化仍被拒绝', async (t) => {
+  const c = await database(t);
+  await runMigrations(c, 'migrate');
+  await seed(c);
+  const before = await dataFingerprint(c);
+  await c.query('DROP SCHEMA drizzle CASCADE');
+  const manifest = JSON.parse(
+    await readFile(join(migrationsFolder, '0000_baseline.catalog.json'), 'utf8'),
+  );
+  const windowsSource = manifest.schema.functions[0].source.replaceAll('\n', '\r\n');
+  await c.query(`CREATE OR REPLACE FUNCTION public.set_updated_at() RETURNS trigger
+    LANGUAGE plpgsql AS $updated_at$${windowsSource}$updated_at$`);
+  assert.deepEqual(await runMigrations(c, 'baseline'), { baselined: true, tablesVerified: 8 });
+  assert.deepEqual(await dataFingerprint(c), before);
+
+  await c.query('DROP SCHEMA drizzle CASCADE');
+  const changedSource = windowsSource.replace('CURRENT_TIMESTAMP', 'clock_timestamp()');
+  await c.query(`CREATE OR REPLACE FUNCTION public.set_updated_at() RETURNS trigger
+    LANGUAGE plpgsql AS $updated_at$${changedSource}$updated_at$`);
+  await assert.rejects(runMigrations(c, 'baseline'), /schema.functions.0.source/);
+  assert.equal(
+    (await c.query("SELECT to_regclass('drizzle.__drizzle_migrations') AS name")).rows[0].name,
+    null,
+  );
+  assert.deepEqual(await dataFingerprint(c), before);
+});
+
 test('缺字段/约束/索引/触发器或默认值不符时拒绝接管，不写迁移记录', async (t) => {
   const c = await database(t);
   await runMigrations(c, 'migrate');

@@ -16,7 +16,18 @@ npm run db:status
 npm run dev
 ```
 
-`env:setup` 创建本地 PostgreSQL、业务库和连接配置；迁移只操作 `DATABASE_URL` 明确指定的现有数据库，不负责创建数据库本身。初始迁移创建 8 张表、外键、检查约束、索引和 3 个更新时间触发器，不插入用户、默认口令或示例业务数据。`npm run dev` 不自动执行迁移。
+`env:setup` 创建本地 PostgreSQL、业务库和连接配置；迁移只操作连接配置明确指定的现有业务数据库，不负责创建数据库本身。初始迁移创建 8 张表、外键、检查约束、索引和 3 个更新时间触发器，不插入用户、默认口令或示例业务数据。`npm run dev` 不自动执行迁移。
+
+应用连接与迁移连接可以同时保存在根目录 `.env`，使用不同变量名：
+
+```dotenv
+# 后端日常读写，使用普通业务角色。
+DATABASE_URL=postgresql://agent_ops_app:业务账号密码@数据库地址:5432/agent_ops
+# 结构升级及迁移记录维护，使用有对象所有权/DDL 权限的角色。
+DATABASE_ADMIN_URL=postgresql://agent_ops:管理员密码@数据库地址:5432/agent_ops
+```
+
+`db:baseline`、`db:migrate`、`db:adopt`、`db:status` 优先使用 `DATABASE_ADMIN_URL`，未配置或留空时兼容原有 `DATABASE_URL`。后端业务连接只读取 `DATABASE_URL`。两条连接同时配置时必须指向相同主机、端口和数据库；不需要在每次迁移前改写环境变量。配置独立管理员连接后，由管理员预先创建数据库、角色并授权，`db:up` 只启动实例，不再按业务角色自动接管数据库所有权。
 
 ## 已手动建表的环境
 
@@ -29,6 +40,8 @@ npm run db:migrate
 ```
 
 `db:baseline` 逐项核对已有 8 张表的字段类型、可空性、默认值、主键、外键、唯一及检查约束、索引、触发器和更新时间函数；与版本化的 `0000_baseline.catalog.json` 完全一致后，才登记初始迁移的真实 SQL 哈希和版本时间。该核对文件来自空库执行初始 SQL 后的 PostgreSQL 系统目录，不包含业务数据。缺表或结构不一致时失败，不自动删表、补字段、重设密码或假装已完成。
+
+Windows 手动执行初始 SQL 时，`set_updated_at()` 的函数正文可能保存为 CRLF 换行。核对仅为与初始函数正文完全一致的内容归一化 CRLF/LF，不改写数据库函数或历史 SQL；函数逻辑、语言、安全属性等发生变化仍会拒绝登记。该处理也适用于 `db:adopt` 的结构核对。
 
 登记只增加 `drizzle.__drizzle_migrations` 记录，不执行初始建表 SQL，不修改现有业务行。该日志兼容 Drizzle 的迁移记录格式。已登记后重复运行返回已应用；随后 `db:migrate` 只执行尚未应用的新版本。
 

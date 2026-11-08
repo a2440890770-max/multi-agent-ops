@@ -28,7 +28,7 @@ export function parseBootstrapArgs(args) {
   return values;
 }
 
-async function readPassword(prompt) {
+export async function readPassword(prompt) {
   const input = process.stdin;
   if (!input.isTTY || !process.stdout.isTTY)
     throw new BootstrapError('请在交互终端运行，密码将隐藏输入；不接受命令参数或管道中的密码。');
@@ -86,7 +86,12 @@ async function main() {
   }
   const envPath = fileURLToPath(new URL('../.env', import.meta.url));
   if (existsSync(envPath)) process.loadEnvFile(envPath);
-  const url = validateBusinessTarget(process.env);
+  // Member initialization uses the restricted runtime role, even when a separate
+  // database owner connection is configured for schema migrations.
+  const url = validateBusinessTarget({
+    DATABASE_URL: process.env.DATABASE_URL,
+    MEM0_DATABASE_URL: process.env.MEM0_DATABASE_URL,
+  });
   const database = createBusinessDatabase(url.href);
   const credentials = { password: '', confirmation: '' };
   try {

@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { format } from 'prettier';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+// TypeScript normalizes source paths to forward slashes, including on Windows.
+const root = fileURLToPath(new URL('../', import.meta.url)).replaceAll('\\', '/');
 const file = `${root}shared/src/responses.ts`;
 const program = ts.createProgram([file], { strict: true, target: ts.ScriptTarget.ES2023 });
 const checker = program.getTypeChecker();

@@ -12,3 +12,7 @@ test-results/
 artifacts/model/
 artifacts/memory/
 artifacts/database/
+.idea/
+artifacts/dev-runtime/
+artifacts/content-invocation-*/*.json
+artifacts/content-invocation-*/*.plan.md

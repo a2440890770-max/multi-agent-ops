@@ -1,6 +1,10 @@
 # Multi-Agent Ops
 
-内部团队的多 Agent 智能运营项目。第一阶段面向微博单账号纯文案场景。
+2026-11-07 新增 [Content 独立创作模块](docs/architecture/content.md)：包含抖音图文策划 Prompt、固定版本 Skill、受限读取工具、结构化输入输出和离线验证；人工编辑页补充版本对应审核、已有轮次及评分展示。真实任务执行、Research/Review、完整策划存储及人工接管/调整要求新执行尚待接入，不能视为四 Agent 已上线。
+
+2026-11-08 Content 独立入口按用户指定支持阿里云百炼，配置与服务地址见 [Content 模块说明](docs/architecture/content.md)。该扩展不自动切换其他 Agent 或验证命令的提供商。
+
+内部团队的多 Agent 智能运营项目。当前第一阶段目标为 GitHub 热榜项目解读：系统获取并展示热榜，用户选定一个后，由 Research 搜索资料、读取文本或通过指定 Skill 解析视频并分析项目，再由 Content 生成抖音图文策划；人工制图并上传系统，批准后确认预览、单独点击发布，由浏览器自动化完成发布。浏览器方案不可行时再评估 API，讲解视频制作后续扩展。需求见 [PRD V1.1](docs/product/PRD-V1.1.md)。现有部分源码和页面仍采用旧微博场景，尚未完成新业务迁移。
 
 本仓库使用 **npm workspaces**，由根目录 `package.json` 统一管理 `frontend/`、`backend/`、`agent/`、`shared/`；依赖版本锁定在 `package-lock.json`。
 
@@ -170,4 +174,4 @@ npm run memory:verify
 
 CI 的两个必需检查名为 **`checks`** 和 **`smoke`**：前者完成格式、Lint、类型、测试与构建；后者按三步流程启动真实 PostgreSQL，验证容器重建后的持久卷、运行浏览器联调测试。详情见 [分支保护说明](docs/github-collaboration.md)。
 
-需求基线见 [PRD V1.0](docs/product/PRD-V1.0.md)，环境说明见 [开发环境](docs/infra/README.md)。
+当前需求基线见 [PRD V1.1](docs/product/PRD-V1.1.md)，原 [PRD V1.0](docs/product/PRD-V1.0.md) 保留为历史；环境说明见 [开发环境](docs/infra/README.md)。

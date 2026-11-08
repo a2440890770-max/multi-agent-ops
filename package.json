@@ -41,7 +41,7 @@
     "db:baseline": "node scripts/migrations.mjs baseline",
     "db:adopt": "node scripts/migrations.mjs adopt",
     "db:status": "node scripts/migrations.mjs status",
-    "db:test": "node --test scripts/migrations.test.mjs",
+    "db:test": "node --test scripts/migration-catalog.test.mjs scripts/migration-connection.test.mjs scripts/migrations.test.mjs",
     "memory:check": "node scripts/check-memory-database.mjs"
   },
   "devDependencies": {

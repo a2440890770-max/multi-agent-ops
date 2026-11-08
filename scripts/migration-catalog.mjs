@@ -25,6 +25,16 @@ export function normalizeConstraintDefinition(definition) {
     .replace(new RegExp(`\\((${literal})::character varying\\)::text`, 'g'), '$1::text');
 }
 
+const canonicalUpdatedAtSource =
+  '\nBEGIN\n    NEW.updated_at := CURRENT_TIMESTAMP;\n    RETURN NEW;\nEND;\n';
+
+// Normalize CRLF only for this exact, literal-free initial function body.
+// Other bodies retain every byte, including line endings inside SQL literals.
+export function normalizeUpdatedAtFunctionSource(source) {
+  const lfSource = source.replaceAll('\r\n', '\n');
+  return lfSource === canonicalUpdatedAtSource ? canonicalUpdatedAtSource : source;
+}
+
 export async function inspectBusinessSchema(client) {
   const result = {};
   for (const name of businessTables) {
@@ -82,6 +92,7 @@ export async function inspectBusinessSchema(client) {
      JOIN pg_language l ON l.oid=p.prolang
      WHERE n.nspname='public' AND p.proname='set_updated_at' AND p.pronargs=0`,
   );
+  for (const fn of functions.rows) fn.source = normalizeUpdatedAtFunctionSource(fn.source);
   return { tables: result, functions: functions.rows };
 }
 

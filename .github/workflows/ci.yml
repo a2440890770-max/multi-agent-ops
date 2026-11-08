@@ -21,6 +21,74 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Verify Drizzle snapshot matches table definitions
+        run: |
+          npm run db:generate
+          git diff --exit-code -- backend/drizzle
+  authentication:
+    name: authentication and authorization
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg16-bookworm
+        env:
+          POSTGRES_USER: test_initializer
+          POSTGRES_PASSWORD: ci-synthetic-password
+          POSTGRES_DB: auth_test_012345abcdef
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test_initializer -d auth_test_012345abcdef"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace=shared
+      - run: npm run auth:test
+        env:
+          AUTH_TEST_DATABASE_URL: postgresql://test_initializer:ci-synthetic-password@127.0.0.1:5432/auth_test_012345abcdef
+  task-creation:
+    name: task persistence and mock execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg16-bookworm
+        env:
+          POSTGRES_USER: test_initializer
+          POSTGRES_PASSWORD: ci-synthetic-password
+          POSTGRES_DB: tasks_test_012345abcdef
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test_initializer -d tasks_test_012345abcdef"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace=shared
+      - run: npm run tasks:test
+        env:
+          TASK_TEST_DATABASE_URL: postgresql://test_initializer:ci-synthetic-password@127.0.0.1:5432/tasks_test_012345abcdef
+      - run: npm exec -- playwright install --with-deps chromium
+      - name: Verify browser task flow with isolated PostgreSQL
+        run: npm run test:e2e -- tests/e2e/tasks-real.spec.ts
+        env:
+          CI: 'true'
+          TASK_E2E_ADMIN_URL: postgresql://test_initializer:ci-synthetic-password@127.0.0.1:5432/postgres
   smoke:
     name: smoke
     runs-on: ubuntu-latest
@@ -33,6 +101,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run env:setup
+      - run: npm run db:migrate
+      - run: npm run db:migrate
+      - run: npm run db:test
       - run: npm run db:check
       - name: Verify volume survives container recreation
         run: |

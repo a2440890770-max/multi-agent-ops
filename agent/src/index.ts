@@ -1,5 +1,4 @@
-import type { AgentHealth } from '@multi-agent-ops/shared';
-
-export function describeAgent(): AgentHealth {
-  return { service: 'agent', status: 'ok', stage: 'D1', mode: 'shell', canExecuteTasks: false };
-}
+export { describeAgent } from './health.js';
+export * from './agents/supervisor/index.js';
+export * from './agents/content/index.js';
+export * from './integrations/xxapi/github-hot.js';

@@ -22,7 +22,7 @@
 
 业务表定义统一放在 `backend/src/schema.ts`，通过 `backend/src/database.ts` 的 Drizzle/pg 入口访问。运行 `npm run db:generate` 生成 SQL 和快照，评审后运行 `npm run db:migrate`；不使用 schema push 绕过评审。初始版本管理 D3 的 7 张基础表及保留的原型 `tasks` 表；已有同构表先备份并运行 `db:baseline` 核对登记。后续变更追加新 SQL，不回改已应用的版本；详见[迁移说明](../../backend/drizzle/README.md)。现有健康检查允许使用底层 SQL。
 
-Drizzle 仅管理业务库；不得声明或接管 Mem0 私有检索表。业务迁移使用业务 `DATABASE_URL`，不得使用 `MEM0_DATABASE_URL` 或数据库管理身份。
+Drizzle 仅管理业务库；不得声明或接管 Mem0 私有检索表。后端业务运行使用普通角色的 `DATABASE_URL`；结构升级命令优先使用有对象所有权/DDL 权限的 `DATABASE_ADMIN_URL`，未配置时兼容原有 `DATABASE_URL`。独立迁移连接与应用连接必须指向同一个业务库，不能使用 `MEM0_DATABASE_URL`；管理员连接不用于业务请求。
 
 ## 记忆治理与存储边界
 

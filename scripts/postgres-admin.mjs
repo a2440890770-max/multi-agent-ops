@@ -96,7 +96,7 @@ export async function provisionDatabase(url, { extension = false } = {}) {
 export function safeError(error) {
   let message = error instanceof Error ? error.message : '数据库配置失败';
   for (const [key, value] of Object.entries(process.env)) {
-    if (value && /PASSWORD|API_KEY|DATABASE_URL/.test(key))
+    if (value && /PASSWORD|API_KEY|DATABASE(?:_[A-Z0-9]+)*_URL/.test(key))
       message = message.split(value).join('[REDACTED]');
   }
   return message.replace(/postgres(?:ql)?:\/\/[^\s]+/g, '[REDACTED DATABASE URL]');

@@ -35,7 +35,10 @@ process.exitCode = result.status ?? 1;
 if (result.status === 0 && action === 'up') {
   loadEnvironment();
   // Legacy .env files remain usable for health checks until explicitly migrated.
+  // With separate migration/runtime connections, the administrator provisions
+  // roles and grants explicitly. The runtime role need not own the database.
   if (
+    !process.env.DATABASE_ADMIN_URL &&
     process.env.DATABASE_URL &&
     new URL(process.env.DATABASE_URL).username !== process.env.POSTGRES_USER
   ) {

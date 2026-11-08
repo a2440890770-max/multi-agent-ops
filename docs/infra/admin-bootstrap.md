@@ -4,6 +4,8 @@
 
 在项目根目录配置业务 `DATABASE_URL`，确认迁移已经应用、运行身份为非超级用户且没有创建数据库和角色的权限。然后运行：
 
+该初始化命令始终使用 `DATABASE_URL` 的业务角色；即使另有供结构升级使用的 `DATABASE_ADMIN_URL`，也不会使用迁移角色写入首个管理员。
+
 ```sh
 npm run admin:bootstrap -- --login <管理员账号>
 ```
