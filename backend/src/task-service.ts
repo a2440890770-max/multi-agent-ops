@@ -34,10 +34,16 @@ import {
   publicationDispatches,
   publicationVerifications,
   publicationSendClaims,
+  githubHotSnapshots,
+  executionSteps,
+  projectSelections,
+  researchAuthorizations,
 } from './schema.js';
 import { activeAttempt, attemptModel, contentModel } from './execution-model.js';
 import { TaskTerminationService } from './task-termination-service.js';
 import { TaskExecutionService } from './task-execution-service.js';
+import { ResearchCommandService } from './research-command-service.js';
+import { ResearchReadService } from './research-read-service.js';
 import { EditorialService } from './editorial-service.js';
 import type { EditorialRequest } from './editorial-service.js';
 import { AccountService } from './account-service.js';
@@ -74,6 +80,9 @@ function taskDetail(
     decision?: ManualDecision | null;
     configVersion?: number | null;
     forbiddenTopics?: string[] | null;
+    executorMode?: 'mock' | 'agent' | 'disabled';
+    hotList?: import('@multi-agent-ops/shared').GithubHotList | null;
+    lastDecision?: import('@multi-agent-ops/shared').SupervisorOutput | null;
   } = {},
 ): TaskDetail {
   if (!task.teamId || !task.createdBy)
@@ -130,6 +139,11 @@ function taskDetail(
           }
         : null,
     account,
+    agentExecution: {
+      executorMode: workflow.executorMode ?? attempt?.executorMode ?? 'mock',
+      hotList: workflow.hotList ?? null,
+      lastDecision: workflow.lastDecision ?? null,
+    },
     actions: {
       save: {
         allowed: task.lifecycle === 'open' && !editingLocked,
@@ -142,7 +156,7 @@ function taskDetail(
       start: {
         allowed: enabled && task.lifecycle === 'open' && !attempt && task.executionStatus === null,
         reason: !enabled
-          ? '模拟执行器未启用。'
+          ? '任务执行器未启用。'
           : task.lifecycle !== 'open'
             ? '任务已结束。'
             : attempt
@@ -165,7 +179,7 @@ function taskDetail(
         allowed:
           enabled && task.lifecycle === 'open' && !!attempt && !activeAttempt(attempt.status),
         reason: !enabled
-          ? '模拟执行器未启用。'
+          ? '任务执行器未启用。'
           : !attempt
             ? '尚无执行记录。'
             : activeAttempt(attempt.status)
@@ -268,7 +282,9 @@ export class TaskService {
     private db: Database,
     private now: () => Date = () => new Date(),
     private options: {
-      executorMode?: 'mock' | 'disabled';
+      executorMode?: 'mock' | 'agent' | 'disabled';
+      agentConfiguration?: import('./agent-execution-config.js').AgentConfiguration;
+      researchPolicy?: import('@multi-agent-ops/shared').ResearchAuthorizationPolicy;
       stepDelayMs?: number;
       executionLimits?: import('./execution-config.js').ExecutionLimits;
       simulationPublicationAdapter?: SimulationPublicationAdapter;
@@ -392,6 +408,22 @@ export class TaskService {
   }
   clarify(input: Parameters<TaskExecutionService['clarify']>[0]) {
     return this.execution().clarify(input);
+  }
+  researchCommand(input: Parameters<ResearchCommandService['handle']>[0]) {
+    return new ResearchCommandService(
+      this.db,
+      (connection, id, actor) => this.read(connection, id, actor),
+      this.options,
+    ).handle(input);
+  }
+  listResearchResults(input: Parameters<ResearchReadService['list']>[0]) {
+    return new ResearchReadService(this.db, (context) => this.get(context)).list(input);
+  }
+  getResearchResult(input: Parameters<ResearchReadService['get']>[0]) {
+    return new ResearchReadService(this.db, (context) => this.get(context)).get(input);
+  }
+  getResearchSubmission(input: Parameters<ResearchReadService['submission']>[0]) {
+    return new ResearchReadService(this.db, (context) => this.get(context)).submission(input);
   }
 
   async list(input: {
@@ -720,13 +752,55 @@ export class TaskService {
               .from(publicationSendClaims)
               .where(eq(publicationSendClaims.dispatchId, operation.currentDispatchId))
           : [];
-      return taskDetail(
+      const [selection] =
+        row.attempt?.executorMode === 'agent'
+          ? await connection
+              .select()
+              .from(projectSelections)
+              .where(eq(projectSelections.taskId, taskId))
+          : [];
+      const [hot] =
+        row.attempt?.executorMode === 'agent'
+          ? await connection
+              .select()
+              .from(githubHotSnapshots)
+              .where(
+                and(
+                  eq(githubHotSnapshots.taskId, taskId),
+                  selection
+                    ? eq(githubHotSnapshots.id, selection.hotListSnapshotId)
+                    : eq(githubHotSnapshots.attemptId, row.attempt.id),
+                ),
+              )
+          : [];
+      const [lastSupervisor] =
+        row.attempt?.executorMode === 'agent'
+          ? await connection
+              .select()
+              .from(executionSteps)
+              .where(
+                and(
+                  eq(executionSteps.attemptId, row.attempt.id),
+                  eq(executionSteps.role, 'supervisor'),
+                  eq(executionSteps.status, 'completed'),
+                ),
+              )
+              .orderBy(desc(executionSteps.ordinal))
+              .limit(1)
+          : [];
+      const detail = taskDetail(
         row.task,
         row.account,
         row.attempt,
         row.content,
         this.options.executorMode !== 'disabled',
         {
+          executorMode: this.options.executorMode ?? 'mock',
+          hotList: hot?.snapshot.list ?? null,
+          lastDecision:
+            lastSupervisor?.validatedOutput && 'decision' in lastSupervisor.validatedOutput
+              ? lastSupervisor.validatedOutput
+              : null,
           publication: operation
             ? publicationModel(
                 operation,
@@ -742,6 +816,76 @@ export class TaskService {
           decision: decision?.data ?? null,
         },
       );
+      if (detail.agentExecution && row.attempt?.executorMode === 'agent') {
+        const [pending] = await connection
+          .select()
+          .from(researchAuthorizations)
+          .where(
+            and(
+              eq(researchAuthorizations.attemptId, row.attempt.id),
+              sql`${researchAuthorizations.consumedAt} IS NULL`,
+            ),
+          );
+        const [report] = await connection
+          .select({ id: executionSteps.resultId, version: executionSteps.resultVersion })
+          .from(executionSteps)
+          .where(
+            and(
+              eq(executionSteps.attemptId, row.attempt.id),
+              sql`${executionSteps.resultId} IS NOT NULL`,
+            ),
+          )
+          .orderBy(desc(executionSteps.resultVersion))
+          .limit(1);
+        const enabled = this.options.executorMode === 'agent' && !!this.options.researchPolicy;
+        const baseAllowed =
+          enabled &&
+          row.task.lifecycle === 'open' &&
+          !row.task.activePublishOperationId &&
+          !row.task.publishedOperationId;
+        const waiting =
+          !row.attempt.executorId &&
+          !row.attempt.cancelRequestedAt &&
+          row.attempt.generation === row.task.workGeneration;
+        const action = (allowed: boolean) => ({
+          allowed,
+          reason: allowed
+            ? null
+            : !enabled
+              ? 'Research 执行链尚未接通。'
+              : '当前任务状态不支持此研究操作。',
+        });
+        detail.agentExecution.research = {
+          selectedProject: selection?.project ?? null,
+          pendingAuthorization: pending
+            ? { id: pending.id, mode: pending.mode, baseResultId: pending.baseResultId }
+            : null,
+          latestReport:
+            report?.id && report.version ? { id: report.id, version: report.version } : null,
+          actions: {
+            selectProject: action(
+              baseAllowed &&
+                waiting &&
+                row.attempt.status === 'awaiting_selection' &&
+                !selection &&
+                !pending &&
+                !!hot?.snapshot.list.items.length,
+            ),
+            retryResearch: action(
+              baseAllowed && !!selection && ['failed', 'cancelled'].includes(row.attempt.status),
+            ),
+            supplementResearch: action(
+              baseAllowed &&
+                waiting &&
+                !!selection &&
+                !!report &&
+                !pending &&
+                ['awaiting_materials', 'awaiting_content'].includes(row.attempt.status),
+            ),
+          },
+        };
+      }
+      return detail;
     } catch (error) {
       if (error instanceof AuthError) throw error;
       throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '任务查询服务暂不可用，请稍后重试。');
@@ -900,6 +1044,7 @@ export class TaskService {
           null,
           null,
           this.options.executorMode !== 'disabled',
+          { executorMode: this.options.executorMode ?? 'mock' },
         );
         await tx.insert(idempotencyRecords).values({
           scopeHash,

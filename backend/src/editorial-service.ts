@@ -12,7 +12,7 @@ import type {
 } from '@multi-agent-ops/shared';
 import { AuthError } from './auth.js';
 import type { createBusinessDatabase } from './database.js';
-import { contentModel } from './execution-model.js';
+import { activeAttempt, contentModel } from './execution-model.js';
 import { invalidateApproval, lockEditorialTeam } from './editorial-state.js';
 import type { EditorialTransaction } from './editorial-state.js';
 import { basicIssues, defaultEditorialConfig, reviewEligible } from './manual-review.js';
@@ -454,10 +454,7 @@ export class EditorialService {
       fail('REVISION_CONFLICT', '任务已更新，输入已保留；请比较服务器当前版本后重新操作。');
     if (task.lifecycle !== 'open') fail('INVALID_STATE', '任务已结束，不能修改或批准。');
     const detail = await this.read(tx, taskId, input.actor);
-    if (
-      detail.workLock ||
-      ['queued', 'running', 'awaiting_clarification'].includes(detail.execution ?? '')
-    )
+    if (detail.workLock || activeAttempt(detail.execution ?? ''))
       throw new AuthError(423, 'WORK_LOCKED', '当前执行尚未结束，请先停止或等待完成。');
     const config = await this.config(tx, input.actor, now);
     if (task.accountId && task.accountId !== config.accountId)

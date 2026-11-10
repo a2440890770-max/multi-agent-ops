@@ -59,11 +59,13 @@ export function registerBusinessAuthorization(app: FastifyInstance, auth: AuthSe
         code: failure.code,
         message: failure.message,
         retryable: failure.status === 503,
-        fieldErrors: (error.validation ?? []).map((entry) => ({
-          field: `${error.validationContext ?? ''}${entry.instancePath}${entry.keyword === 'required' ? `/${String(entry.params.missingProperty)}` : ''}`,
-          message: entry.message ?? '字段无效',
-        })),
-        conflict: null,
+        fieldErrors:
+          failure.details?.fieldErrors ??
+          (error.validation ?? []).map((entry) => ({
+            field: `${error.validationContext ?? ''}${entry.instancePath}${entry.keyword === 'required' ? `/${String(entry.params.missingProperty)}` : ''}`,
+            message: entry.message ?? '字段无效',
+          })),
+        conflict: failure.details?.conflict ?? null,
         operationId: null,
         dispatchId: null,
       },

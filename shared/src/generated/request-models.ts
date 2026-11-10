@@ -47,6 +47,43 @@ export interface OperationBodies {
     reason: string;
     simulationScenario?: 'success' | 'failure' | 'clarification';
   };
+  selectProjectAndAuthorizeResearch: {
+    expectedRevision: number;
+    authorizeResearch: true;
+    attemptId: string;
+    hotListSnapshotId: string;
+    candidateId: string;
+  };
+  listResearchResults: undefined;
+  getResearchResult: undefined;
+  getResearchSubmission: undefined;
+  retryResearchAndAuthorize: {
+    expectedRevision: number;
+    authorizeResearch: true;
+    previousAttemptId: string;
+    reason: string;
+  };
+  submitMaterialsAndAuthorizeResearch: {
+    expectedRevision: number;
+    authorizeResearch: true;
+    attemptId: string;
+    baseResultId: string;
+    questionIds: string[];
+    gapIds: string[];
+    materials: {
+      clientRef: string;
+      label: string;
+      text: string | null;
+      sourceUrl: string | null;
+      confirmFirstHand: boolean;
+    }[];
+    confirmExistingMaterials: {
+      materialId: string;
+      materialVersion: number;
+      contentSha256: string;
+    }[];
+    officialSiteGrants: { origin: string; pathPrefix: string }[];
+  };
   terminateTask: { expectedRevision: number; reason: string };
   copyTask: { expectedRevision: number; sourceContentVersionId: string | null; title: string };
   listContent: undefined;
@@ -194,6 +231,9 @@ export interface OperationQueries {
     lifecycle?: 'open' | 'terminated' | 'published';
     execution?:
       | 'awaiting_clarification'
+      | 'awaiting_selection'
+      | 'awaiting_materials'
+      | 'awaiting_content'
       | 'queued'
       | 'running'
       | 'manual_required'
@@ -215,6 +255,12 @@ export interface OperationQueries {
   startTask: undefined;
   stopAttempt: undefined;
   retryTask: undefined;
+  selectProjectAndAuthorizeResearch: undefined;
+  listResearchResults: { cursor?: string; limit?: number; attemptId?: string };
+  getResearchResult: undefined;
+  getResearchSubmission: undefined;
+  retryResearchAndAuthorize: undefined;
+  submitMaterialsAndAuthorizeResearch: undefined;
   terminateTask: undefined;
   copyTask: undefined;
   listContent: { cursor?: string; limit?: number };
@@ -281,6 +327,12 @@ export interface OperationParams {
   startTask: { taskId: string };
   stopAttempt: { taskId: string; attemptId: string };
   retryTask: { taskId: string };
+  selectProjectAndAuthorizeResearch: { taskId: string };
+  listResearchResults: { taskId: string };
+  getResearchResult: { taskId: string; resultId: string };
+  getResearchSubmission: { taskId: string; submissionId: string };
+  retryResearchAndAuthorize: { taskId: string };
+  submitMaterialsAndAuthorizeResearch: { taskId: string };
   terminateTask: { taskId: string };
   copyTask: { taskId: string };
   listContent: { taskId: string };
@@ -340,6 +392,12 @@ export interface OperationResponses {
   startTask: ResponseModels['TaskDetail'];
   stopAttempt: ResponseModels['TaskDetail'];
   retryTask: ResponseModels['TaskDetail'];
+  selectProjectAndAuthorizeResearch: ResponseModels['ResearchCommand'];
+  listResearchResults: ResponseModels['ResearchResults'];
+  getResearchResult: ResponseModels['ResearchResult'];
+  getResearchSubmission: ResponseModels['ResearchSubmission'];
+  retryResearchAndAuthorize: ResponseModels['ResearchCommand'];
+  submitMaterialsAndAuthorizeResearch: ResponseModels['ResearchCommand'];
   terminateTask: ResponseModels['TaskDetail'];
   copyTask: ResponseModels['TaskDetail'];
   listContent: ResponseModels['ContentVersions'];

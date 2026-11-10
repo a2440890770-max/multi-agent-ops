@@ -1,4 +1,16 @@
-import type { PublicationSnapshot, PublicationStatus } from '@multi-agent-ops/shared';
+import type {
+  GithubHotList,
+  SelectedProject,
+  ResearchAcceptedResult,
+  ResearchContext,
+  ResearchWebSnapshot,
+  SupervisorContext,
+  SupervisorOutput,
+  ResearchAuthorizationScope,
+  ResearchSubmissionRecord,
+  PublicationSnapshot,
+  PublicationStatus,
+} from '@multi-agent-ops/shared';
 import { sql } from 'drizzle-orm';
 import type {
   Approval,
@@ -296,6 +308,9 @@ export const tasks = pgTable(
     originalRequest: text('original_request').notNull(),
     executionStatus: text('execution_status').$type<
       | 'awaiting_clarification'
+      | 'awaiting_selection'
+      | 'awaiting_materials'
+      | 'awaiting_content'
       | 'queued'
       | 'running'
       | 'needs_human'
@@ -347,7 +362,7 @@ export const tasks = pgTable(
     }),
     check(
       'tasks_approval_status_check',
-      sql`${t.approvalStatus} IN ('not_requested','pending','approved','invalidated')`,
+      sql`"tasks"."approval_status" IN ('not_requested','pending','approved','invalidated')`,
     ),
     foreignKey({
       name: 'tasks_current_review_fk',
@@ -369,7 +384,7 @@ export const tasks = pgTable(
       columns: [t.id, t.currentContentVersionId],
       foreignColumns: [taskContents.taskId, taskContents.id],
     }),
-    check('tasks_work_generation_check', sql`${t.workGeneration} >= 0`),
+    check('tasks_work_generation_check', sql`"tasks"."work_generation" >= 0`),
     foreignKey({
       name: 'tasks_created_by_fkey',
       columns: [t.createdBy],
@@ -387,16 +402,16 @@ export const tasks = pgTable(
       columns: [t.accountId],
       foreignColumns: [accounts.id],
     }).onDelete('restrict'),
-    check('tasks_reference_inputs_check', sql`jsonb_typeof(${t.referenceInputs}) = 'array'`),
-    check('tasks_lifecycle_check', sql`${t.lifecycle} IN ('open', 'terminated', 'published')`),
+    check('tasks_reference_inputs_check', sql`jsonb_typeof("tasks"."reference_inputs") = 'array'`),
+    check('tasks_lifecycle_check', sql`"tasks"."lifecycle" IN ('open', 'terminated', 'published')`),
     check(
       'tasks_termination_record_check',
-      sql`(${t.terminatedBy} IS NULL AND ${t.terminatedAt} IS NULL AND ${t.terminationReason} IS NULL) OR (${t.lifecycle} = 'terminated' AND ${t.terminatedBy} IS NOT NULL AND ${t.terminatedAt} IS NOT NULL AND ${t.terminationReason} IS NOT NULL AND length(btrim(${t.terminationReason})) > 0)`,
+      sql`("tasks"."terminated_by" IS NULL AND "tasks"."terminated_at" IS NULL AND "tasks"."termination_reason" IS NULL) OR ("tasks"."lifecycle" = 'terminated' AND "tasks"."terminated_by" IS NOT NULL AND "tasks"."terminated_at" IS NOT NULL AND "tasks"."termination_reason" IS NOT NULL AND length(btrim("tasks"."termination_reason")) > 0)`,
     ),
-    check('tasks_revision_check', sql`${t.revision} >= 1`),
+    check('tasks_revision_check', sql`"tasks"."revision" >= 1`),
     check(
       'tasks_execution_status_check',
-      sql`${t.executionStatus} IN ('awaiting_clarification', 'queued', 'running', 'needs_human', 'ready', 'failed', 'cancelled')`,
+      sql`"tasks"."execution_status" IN ('awaiting_clarification', 'awaiting_selection', 'awaiting_materials', 'awaiting_content', 'queued', 'running', 'needs_human', 'ready', 'failed', 'cancelled')`,
     ),
   ],
 );
@@ -420,14 +435,24 @@ export const executionAttempts = pgTable(
     attemptNo: integer('attempt_no').notNull(),
     generation: integer('generation').notNull(),
     status: text('status')
-      .$type<'queued' | 'running' | 'awaiting_clarification' | 'ready' | 'failed' | 'cancelled'>()
+      .$type<
+        | 'queued'
+        | 'running'
+        | 'awaiting_clarification'
+        | 'awaiting_selection'
+        | 'awaiting_materials'
+        | 'awaiting_content'
+        | 'ready'
+        | 'failed'
+        | 'cancelled'
+      >()
       .notNull(),
     currentStep: text('current_step'),
     autoRevisionCount: integer('auto_revision_count').notNull().default(0),
     configVersion: integer('config_version').notNull().default(1),
-    executorMode: text('executor_mode').$type<'mock'>().notNull().default('mock'),
-    simulationScenario: text('simulation_scenario').$type<SimulationScenario>().notNull(),
-    configSnapshot: jsonb('config_snapshot').$type<MockSnapshot>().notNull(),
+    executorMode: text('executor_mode').$type<'mock' | 'agent'>().notNull().default('mock'),
+    simulationScenario: text('simulation_scenario').$type<SimulationScenario>(),
+    configSnapshot: jsonb('config_snapshot').$type<MockSnapshot | AgentSnapshot>().notNull(),
     clarifications: jsonb('clarifications')
       .$type<Clarification[]>()
       .notNull()
@@ -459,17 +484,19 @@ export const executionAttempts = pgTable(
     unique('execution_attempts_task_no_key').on(t.taskId, t.attemptNo),
     uniqueIndex('execution_attempts_active_task_idx')
       .on(t.taskId)
-      .where(sql`${t.status} IN ('queued', 'running', 'awaiting_clarification')`),
+      .where(
+        sql`${t.status} IN ('queued', 'running', 'awaiting_clarification', 'awaiting_selection', 'awaiting_materials', 'awaiting_content')`,
+      ),
     index('execution_attempts_due_idx')
       .on(t.nextRunAt)
       .where(sql`${t.status} IN ('queued', 'running')`),
-    check('execution_attempts_elapsed_check', sql`${t.activeElapsedMs} >= 0`),
+    check('execution_attempts_elapsed_check', sql`"execution_attempts"."active_elapsed_ms" >= 0`),
     index('execution_attempts_lease_idx')
       .on(t.leaseExpiresAt)
       .where(sql`${t.status} = 'running'`),
     check(
       'execution_attempts_lease_check',
-      sql`(${t.executorId} IS NULL AND ${t.claimToken} IS NULL AND ${t.claimedAt} IS NULL AND ${t.heartbeatAt} IS NULL AND ${t.leaseExpiresAt} IS NULL) OR (${t.executorId} IS NOT NULL AND ${t.claimToken} IS NOT NULL AND ${t.claimedAt} IS NOT NULL AND ${t.heartbeatAt} IS NOT NULL AND ${t.leaseExpiresAt} IS NOT NULL AND ${t.leaseExpiresAt} >= ${t.heartbeatAt} AND ${t.heartbeatAt} >= ${t.claimedAt})`,
+      sql`("execution_attempts"."executor_id" IS NULL AND "execution_attempts"."claim_token" IS NULL AND "execution_attempts"."claimed_at" IS NULL AND "execution_attempts"."heartbeat_at" IS NULL AND "execution_attempts"."lease_expires_at" IS NULL) OR ("execution_attempts"."executor_id" IS NOT NULL AND "execution_attempts"."claim_token" IS NOT NULL AND "execution_attempts"."claimed_at" IS NOT NULL AND "execution_attempts"."heartbeat_at" IS NOT NULL AND "execution_attempts"."lease_expires_at" IS NOT NULL AND "execution_attempts"."lease_expires_at" >= "execution_attempts"."heartbeat_at" AND "execution_attempts"."heartbeat_at" >= "execution_attempts"."claimed_at")`,
     ),
     foreignKey({
       name: 'execution_attempts_task_fk',
@@ -488,28 +515,39 @@ export const executionAttempts = pgTable(
     }).onDelete('restrict'),
     check(
       'execution_attempts_counts_check',
-      sql`${t.attemptNo} >= 1 AND ${t.generation} >= 1 AND ${t.configVersion} >= 1 AND ${t.autoRevisionCount} = 0`,
+      sql`"execution_attempts"."attempt_no" >= 1 AND "execution_attempts"."generation" >= 1 AND "execution_attempts"."config_version" >= 1 AND "execution_attempts"."auto_revision_count" = 0`,
     ),
     check(
       'execution_attempts_status_check',
-      sql`${t.status} IN ('queued', 'running', 'awaiting_clarification', 'ready', 'failed', 'cancelled')`,
+      sql`"execution_attempts"."status" IN ('queued', 'running', 'awaiting_clarification', 'awaiting_selection', 'awaiting_materials', 'awaiting_content', 'ready', 'failed', 'cancelled')`,
     ),
-    check('execution_attempts_mode_check', sql`${t.executorMode} = 'mock'`),
+    check(
+      'execution_attempts_mode_check',
+      sql`"execution_attempts"."executor_mode" IN ('mock','agent')`,
+    ),
     check(
       'execution_attempts_scenario_check',
-      sql`${t.simulationScenario} IN ('success', 'failure', 'clarification')`,
+      sql`(("execution_attempts"."executor_mode" = 'mock' AND "execution_attempts"."simulation_scenario" IN ('success', 'failure', 'clarification')) OR ("execution_attempts"."executor_mode" = 'agent' AND "execution_attempts"."simulation_scenario" IS NULL)) IS TRUE`,
     ),
     check(
       'execution_attempts_cancel_scope_check',
-      sql`${t.cancelScope} IS NULL OR ${t.cancelScope} IN ('stop_attempt','terminate_task')`,
+      sql`"execution_attempts"."cancel_scope" IS NULL OR "execution_attempts"."cancel_scope" IN ('stop_attempt','terminate_task')`,
     ),
     check(
       'execution_attempts_snapshot_check',
-      sql`jsonb_typeof(${t.configSnapshot}) = 'object' AND jsonb_typeof(${t.clarifications}) = 'array'`,
+      sql`jsonb_typeof("execution_attempts"."config_snapshot") = 'object' AND jsonb_typeof("execution_attempts"."clarifications") = 'array'`,
+    ),
+    check(
+      'execution_attempts_agent_snapshot_check',
+      sql`"execution_attempts"."executor_mode" <> 'agent' OR ("execution_attempts"."config_snapshot"->>'mode' = 'agent' AND "execution_attempts"."config_snapshot"->>'executorVersion' = '1' AND jsonb_typeof("execution_attempts"."config_snapshot"->'configuration') = 'object') IS TRUE`,
+    ),
+    check(
+      'execution_attempts_wait_check',
+      sql`("execution_attempts"."status" NOT IN ('awaiting_selection','awaiting_materials','awaiting_content') OR "execution_attempts"."executor_mode" = 'agent') AND ("execution_attempts"."executor_mode" <> 'agent' OR "execution_attempts"."status" NOT IN ('awaiting_clarification','awaiting_selection','awaiting_materials','awaiting_content') OR ("execution_attempts"."executor_id" IS NULL AND "execution_attempts"."active_since" IS NULL AND "execution_attempts"."next_run_at" IS NULL))`,
     ),
     check(
       'execution_attempts_finish_check',
-      sql`(${t.status} IN ('ready','failed','cancelled')) = (${t.finishedAt} IS NOT NULL)`,
+      sql`("execution_attempts"."status" IN ('ready','failed','cancelled')) = ("execution_attempts"."finished_at" IS NOT NULL)`,
     ),
   ],
 );
@@ -531,26 +569,85 @@ export const executionSteps = pgTable(
     retryCount: integer('retry_count').notNull().default(0),
     nextCallAt: time('next_call_at'),
     error: jsonb('error').$type<Failure>(),
+    parentStepId: uuid('parent_step_id'),
+    authorizationId: uuid('authorization_id'),
+    inputSnapshotId: uuid('input_snapshot_id'),
+    frozenInput: jsonb('frozen_input').$type<SupervisorContext | ResearchContext>(),
+    validatedOutput: jsonb('validated_output').$type<SupervisorOutput | ResearchAcceptedResult>(),
+    runtimeMetadata: jsonb('runtime_metadata').$type<Record<string, unknown>>(),
+    resultId: text('result_id'),
+    resultVersion: integer('result_version'),
+    parentResultId: text('parent_result_id'),
   },
-  (t) => [
+  (t): PgTableExtraConfigValue[] => [
     unique('execution_steps_attempt_id_key').on(t.attemptId, t.id),
     unique('execution_steps_attempt_ordinal_key').on(t.attemptId, t.ordinal),
+    unique('execution_steps_input_key').on(t.attemptId, t.id, t.inputSnapshotId),
+    unique('execution_steps_authorized_key').on(t.attemptId, t.id, t.authorizationId),
+    unique('execution_steps_result_key').on(t.attemptId, t.resultId),
+    unique('execution_steps_result_version_key').on(t.attemptId, t.resultVersion),
+    unique('execution_steps_result_parent_key').on(t.attemptId, t.parentResultId),
+    uniqueIndex('execution_steps_research_authorization_idx')
+      .on(t.authorizationId)
+      .where(sql`${t.role} = 'research' AND ${t.authorizationId} IS NOT NULL`),
+    foreignKey({
+      name: 'execution_steps_parent_fk',
+      columns: [t.attemptId, t.parentStepId],
+      foreignColumns: [t.attemptId, t.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'execution_steps_authorization_fk',
+      columns: [t.attemptId, t.authorizationId],
+      foreignColumns: [researchAuthorizations.attemptId, researchAuthorizations.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'execution_steps_result_parent_fk',
+      columns: [t.attemptId, t.parentResultId],
+      foreignColumns: [t.attemptId, t.resultId],
+    }).onDelete('restrict'),
     foreignKey({
       name: 'execution_steps_attempt_fk',
       columns: [t.attemptId],
       foreignColumns: [executionAttempts.id],
     }).onDelete('restrict'),
-    check('execution_steps_ordinal_check', sql`${t.ordinal} BETWEEN 0 AND 3`),
+    check('execution_steps_ordinal_check', sql`"execution_steps"."ordinal" >= 0`),
+    check(
+      'execution_steps_parent_check',
+      sql`"execution_steps"."parent_step_id" IS NULL OR "execution_steps"."parent_step_id" <> "execution_steps"."id"`,
+    ),
+    check(
+      'execution_steps_input_check',
+      sql`("execution_steps"."input_snapshot_id" IS NULL AND "execution_steps"."frozen_input" IS NULL) OR ("execution_steps"."input_snapshot_id" IS NOT NULL AND (jsonb_typeof("execution_steps"."frozen_input") = 'object' AND "execution_steps"."frozen_input"->'execution'->>'attemptId' = "execution_steps"."attempt_id"::text AND "execution_steps"."frozen_input"->'execution'->>'stepId' = "execution_steps"."id"::text AND "execution_steps"."frozen_input"->'execution'->>'inputSnapshotId' = "execution_steps"."input_snapshot_id"::text) IS TRUE)`,
+    ),
+    check(
+      'execution_steps_output_check',
+      sql`"execution_steps"."validated_output" IS NULL OR ("execution_steps"."status" = 'completed' AND "execution_steps"."frozen_input" IS NOT NULL AND jsonb_typeof("execution_steps"."validated_output") = 'object')`,
+    ),
+    check(
+      'execution_steps_metadata_check',
+      sql`"execution_steps"."runtime_metadata" IS NULL OR jsonb_typeof("execution_steps"."runtime_metadata") = 'object'`,
+    ),
+    check(
+      'execution_steps_result_check',
+      sql`("execution_steps"."result_id" IS NULL AND "execution_steps"."result_version" IS NULL AND "execution_steps"."parent_result_id" IS NULL AND ("execution_steps"."role" <> 'research' OR "execution_steps"."validated_output" IS NULL)) OR ("execution_steps"."role" = 'research' AND "execution_steps"."authorization_id" IS NOT NULL AND "execution_steps"."result_id" IS NOT NULL AND "execution_steps"."result_version" >= 1 AND (("execution_steps"."result_version" = 1 AND "execution_steps"."parent_result_id" IS NULL) OR ("execution_steps"."result_version" > 1 AND "execution_steps"."parent_result_id" IS NOT NULL AND "execution_steps"."parent_result_id" <> "execution_steps"."result_id")) AND ("execution_steps"."validated_output"->>'id' = "execution_steps"."result_id" AND ("execution_steps"."validated_output"->>'version')::integer = "execution_steps"."result_version" AND "execution_steps"."validated_output"->>'parentResultId' IS NOT DISTINCT FROM "execution_steps"."parent_result_id" AND "execution_steps"."validated_output"->'execution'->>'attemptId' = "execution_steps"."attempt_id"::text AND "execution_steps"."validated_output"->'execution'->>'stepId' = "execution_steps"."id"::text AND "execution_steps"."validated_output"->'execution'->>'inputSnapshotId' = "execution_steps"."input_snapshot_id"::text AND "execution_steps"."validated_output"->>'authorizationId' = "execution_steps"."authorization_id"::text) IS TRUE) IS TRUE`,
+    ),
     check(
       'execution_steps_role_check',
-      sql`${t.role} IN ('supervisor','research','content','review')`,
+      sql`"execution_steps"."role" IN ('supervisor','research','content','review')`,
     ),
     check(
       'execution_steps_status_check',
-      sql`${t.status} IN ('queued','running','completed','failed','cancelled')`,
+      sql`"execution_steps"."status" IN ('queued','running','completed','failed','cancelled')`,
     ),
-    check('execution_steps_retry_check', sql`${t.retryCount} >= 0 AND ${t.retryCount} <= 10`),
-    check('execution_steps_duration_check', sql`${t.durationMs} >= 0`),
+    check(
+      'execution_steps_retry_check',
+      sql`"execution_steps"."retry_count" >= 0 AND "execution_steps"."retry_count" <= 10`,
+    ),
+    check('execution_steps_duration_check', sql`"execution_steps"."duration_ms" >= 0`),
+    check(
+      'execution_steps_frozen_time_check',
+      sql`"execution_steps"."frozen_input" IS NULL OR ((("execution_steps"."status" IN ('queued','running')) = ("execution_steps"."finished_at" IS NULL)) AND ("execution_steps"."status" <> 'running' OR "execution_steps"."started_at" IS NOT NULL) AND ("execution_steps"."status" <> 'completed' OR "execution_steps"."started_at" IS NOT NULL) AND ("execution_steps"."started_at" IS NULL OR "execution_steps"."finished_at" IS NULL OR "execution_steps"."finished_at" >= "execution_steps"."started_at"))`,
+    ),
   ],
 );
 
@@ -931,8 +1028,48 @@ export const executionCalls = pgTable(
     deadlineAt: time('deadline_at').notNull(),
     finishedAt: time('finished_at'),
     error: jsonb('error').$type<Failure>(),
+    toolName: text('tool_name'),
+    sdkSessionId: text('sdk_session_id'),
+    sdkToolUseId: text('sdk_tool_use_id'),
+    parentCallId: uuid('parent_call_id'),
+    inputSnapshotId: uuid('input_snapshot_id'),
+    authorizationId: uuid('authorization_id'),
   },
-  (t) => [
+  (t): PgTableExtraConfigValue[] => [
+    unique('execution_calls_scope_id_key').on(t.taskId, t.attemptId, t.id),
+    unique('execution_calls_sdk_tool_key').on(t.attemptId, t.sdkSessionId, t.sdkToolUseId),
+    foreignKey({
+      name: 'execution_calls_parent_fk',
+      columns: [t.taskId, t.attemptId, t.parentCallId],
+      foreignColumns: [t.taskId, t.attemptId, t.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'execution_calls_input_fk',
+      columns: [t.attemptId, t.stepId, t.inputSnapshotId],
+      foreignColumns: [executionSteps.attemptId, executionSteps.id, executionSteps.inputSnapshotId],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'execution_calls_authorization_fk',
+      columns: [t.taskId, t.attemptId, t.authorizationId],
+      foreignColumns: [
+        researchAuthorizations.taskId,
+        researchAuthorizations.attemptId,
+        researchAuthorizations.id,
+      ],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'execution_calls_step_authorization_fk',
+      columns: [t.attemptId, t.stepId, t.authorizationId],
+      foreignColumns: [executionSteps.attemptId, executionSteps.id, executionSteps.authorizationId],
+    }).onDelete('restrict'),
+    check(
+      'execution_calls_parent_check',
+      sql`"task_execution_calls"."parent_call_id" IS NULL OR "task_execution_calls"."parent_call_id" <> "task_execution_calls"."id"`,
+    ),
+    check(
+      'execution_calls_sdk_check',
+      sql`("task_execution_calls"."sdk_tool_use_id" IS NULL OR ("task_execution_calls"."sdk_session_id" IS NOT NULL AND "task_execution_calls"."tool_name" IS NOT NULL)) AND ("task_execution_calls"."tool_name" IS NULL OR length(btrim("task_execution_calls"."tool_name")) > 0) AND ("task_execution_calls"."sdk_session_id" IS NULL OR length(btrim("task_execution_calls"."sdk_session_id")) > 0) AND ("task_execution_calls"."sdk_tool_use_id" IS NULL OR length(btrim("task_execution_calls"."sdk_tool_use_id")) > 0)`,
+    ),
     foreignKey({
       name: 'execution_calls_step_fk',
       columns: [t.attemptId, t.stepId],
@@ -950,19 +1087,370 @@ export const executionCalls = pgTable(
     index('execution_calls_task_idx').on(t.taskId, t.startedAt),
     check(
       'execution_calls_counts_check',
-      sql`${t.callNo} >= 1 AND ${t.retryNo} >= 0 AND ${t.reservedTokens} >= 0 AND ${t.reservedCostMicrosCny} >= 0 AND ${t.chargedTokens} >= 0 AND ${t.chargedCostMicrosCny} >= 0`,
+      sql`"task_execution_calls"."call_no" >= 1 AND "task_execution_calls"."retry_no" >= 0 AND "task_execution_calls"."reserved_tokens" >= 0 AND "task_execution_calls"."reserved_cost_micros_cny" >= 0 AND "task_execution_calls"."charged_tokens" >= 0 AND "task_execution_calls"."charged_cost_micros_cny" >= 0`,
     ),
     check(
       'execution_calls_kind_check',
-      sql`${t.kind} IN ('simulation','model','search','readonly')`,
+      sql`"task_execution_calls"."kind" IN ('simulation','model','search','readonly')`,
     ),
     check(
       'execution_calls_status_check',
-      sql`${t.status} IN ('running','succeeded','failed','timed_out','interrupted')`,
+      sql`"task_execution_calls"."status" IN ('running','succeeded','failed','timed_out','interrupted')`,
     ),
     check(
       'execution_calls_time_check',
-      sql`${t.deadlineAt} > ${t.startedAt} AND (${t.status} = 'running') = (${t.finishedAt} IS NULL)`,
+      sql`"task_execution_calls"."deadline_at" > "task_execution_calls"."started_at" AND ("task_execution_calls"."status" = 'running') = ("task_execution_calls"."finished_at" IS NULL)`,
     ),
   ],
 );
+
+export const researchAssets = pgTable(
+  'research_assets',
+  {
+    // Existing tools return opaque video_/audio_/transcript_/frame_ IDs, not bare UUIDs.
+    id: text('id').primaryKey(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    authorizationId: uuid('authorization_id').notNull(),
+    sourceId: text('source_id').notNull(),
+    parentAssetId: text('parent_asset_id'),
+    kind: text('kind').$type<'video' | 'audio' | 'transcript' | 'frame'>().notNull(),
+    storageKey: text('storage_key').notNull(),
+    sha256: text('sha256').notNull(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('research_assets_scope_id_key').on(t.attemptId, t.authorizationId, t.sourceId, t.id),
+    unique('research_assets_storage_key').on(t.storageKey),
+    index('research_assets_source_idx').on(t.authorizationId, t.sourceId),
+    foreignKey({
+      name: 'research_assets_authorization_fk',
+      columns: [t.taskId, t.attemptId, t.authorizationId],
+      foreignColumns: [
+        researchAuthorizations.taskId,
+        researchAuthorizations.attemptId,
+        researchAuthorizations.id,
+      ],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'research_assets_parent_fk',
+      columns: [t.attemptId, t.authorizationId, t.sourceId, t.parentAssetId],
+      foreignColumns: [t.attemptId, t.authorizationId, t.sourceId, t.id],
+    }).onDelete('restrict'),
+    check(
+      'research_assets_kind_check',
+      sql`"research_assets"."kind" IN ('video','audio','transcript','frame')`,
+    ),
+    check(
+      'research_assets_identity_check',
+      sql`length(btrim("research_assets"."id")) > 0 AND length(btrim("research_assets"."source_id")) > 0 AND ("research_assets"."parent_asset_id" IS NULL OR "research_assets"."parent_asset_id" <> "research_assets"."id")`,
+    ),
+    check('research_assets_hash_check', sql`"research_assets"."sha256" ~ '^[a-f0-9]{64}$'`),
+    check(
+      'research_assets_metadata_check',
+      sql`jsonb_typeof("research_assets"."metadata") = 'object'`,
+    ),
+    check(
+      'research_assets_storage_check',
+      sql`length(btrim("research_assets"."storage_key")) > 0 AND "research_assets"."storage_key" !~ '^/' AND "research_assets"."storage_key" !~ '(^|/)\\.\\.(/|$)' AND position(chr(92) in "research_assets"."storage_key") = 0`,
+    ),
+  ],
+);
+
+export const researchRegistries = pgTable(
+  'research_registries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    authorizationId: uuid('authorization_id').notNull(),
+    stepId: uuid('step_id').notNull(),
+    inputSnapshotId: uuid('input_snapshot_id').notNull(),
+    snapshot: jsonb('snapshot').$type<ResearchWebSnapshot>().notNull(),
+    registryRevision: integer('registry_revision').notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('research_registries_authorization_key').on(t.authorizationId),
+    foreignKey({
+      name: 'research_registries_authorization_fk',
+      columns: [t.taskId, t.attemptId, t.authorizationId],
+      foreignColumns: [
+        researchAuthorizations.taskId,
+        researchAuthorizations.attemptId,
+        researchAuthorizations.id,
+      ],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'research_registries_step_fk',
+      columns: [t.attemptId, t.stepId, t.authorizationId],
+      foreignColumns: [executionSteps.attemptId, executionSteps.id, executionSteps.authorizationId],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'research_registries_input_fk',
+      columns: [t.attemptId, t.stepId, t.inputSnapshotId],
+      foreignColumns: [executionSteps.attemptId, executionSteps.id, executionSteps.inputSnapshotId],
+    }).onDelete('restrict'),
+    check(
+      'research_registries_snapshot_check',
+      sql`(jsonb_typeof("research_registries"."snapshot") = 'object' AND "research_registries"."snapshot"->>'schemaVersion' = '1.0' AND "research_registries"."snapshot"->'execution'->>'taskId' = "research_registries"."task_id"::text AND "research_registries"."snapshot"->'execution'->>'attemptId' = "research_registries"."attempt_id"::text AND "research_registries"."snapshot"->'execution'->>'stepId' = "research_registries"."step_id"::text AND "research_registries"."snapshot"->'execution'->>'inputSnapshotId' = "research_registries"."input_snapshot_id"::text AND "research_registries"."snapshot"->>'authorizationId' = "research_registries"."authorization_id"::text AND jsonb_typeof("research_registries"."snapshot"->'sources') = 'array' AND jsonb_typeof("research_registries"."snapshot"->'materials') = 'array' AND jsonb_typeof("research_registries"."snapshot"->'calls') = 'array') IS TRUE`,
+    ),
+    check(
+      'research_registries_time_check',
+      sql`"research_registries"."updated_at" >= "research_registries"."created_at"`,
+    ),
+    check(
+      'research_registries_revision_check',
+      sql`"research_registries"."registry_revision" >= 0`,
+    ),
+  ],
+);
+
+export const researchSubmissionMaterials = pgTable(
+  'research_submission_materials',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    submissionId: uuid('submission_id').notNull(),
+    clientRef: text('client_ref'),
+    sourceId: text('source_id').notNull(),
+    materialId: text('material_id'),
+    materialVersion: integer('material_version'),
+    lineageRootMaterialId: text('lineage_root_material_id'),
+    contentSha256: text('content_sha256'),
+    record: jsonb('record').$type<ResearchSubmissionRecord>().notNull(),
+    confirmedBy: uuid('confirmed_by').references(() => members.id),
+    confirmedAt: time('confirmed_at'),
+  },
+  (t) => [
+    foreignKey({
+      name: 'research_submission_materials_submission_fk',
+      columns: [t.taskId, t.attemptId, t.submissionId],
+      foreignColumns: [
+        researchSubmissions.taskId,
+        researchSubmissions.attemptId,
+        researchSubmissions.id,
+      ],
+    }).onDelete('restrict'),
+    unique('research_submission_materials_snapshot_key').on(t.taskId, t.materialId),
+    unique('research_submission_materials_lineage_key').on(
+      t.taskId,
+      t.lineageRootMaterialId,
+      t.materialVersion,
+    ),
+    unique('research_submission_materials_client_key').on(t.submissionId, t.clientRef),
+    check(
+      'research_submission_materials_record_check',
+      sql`(jsonb_typeof("research_submission_materials"."record") = 'object' AND "research_submission_materials"."record"->'source'->>'id' = "research_submission_materials"."source_id" AND "research_submission_materials"."record"->'source'->>'nature' = 'user_provided') IS TRUE`,
+    ),
+    check(
+      'research_submission_materials_shape_check',
+      sql`((
+      "research_submission_materials"."material_id" IS NULL AND "research_submission_materials"."material_version" IS NULL AND "research_submission_materials"."lineage_root_material_id" IS NULL AND "research_submission_materials"."content_sha256" IS NULL AND "research_submission_materials"."confirmed_by" IS NULL AND "research_submission_materials"."confirmed_at" IS NULL AND "research_submission_materials"."record"->'material' = 'null'::jsonb AND length("research_submission_materials"."record"->'source'->>'url') > 0
+    ) OR (
+      "research_submission_materials"."material_id" IS NOT NULL AND "research_submission_materials"."material_version" >= 1 AND "research_submission_materials"."lineage_root_material_id" IS NOT NULL AND "research_submission_materials"."content_sha256" ~ '^[a-f0-9]{64}$' AND
+      "research_submission_materials"."record"->'material'->>'id' = "research_submission_materials"."material_id" AND ("research_submission_materials"."record"->'material'->>'version')::integer = "research_submission_materials"."material_version" AND "research_submission_materials"."record"->'material'->>'sourceId' = "research_submission_materials"."source_id" AND "research_submission_materials"."record"->'material'->>'kind' = 'pasted_text' AND length(btrim("research_submission_materials"."record"->'material'->>'content')) > 0 AND
+      "research_submission_materials"."content_sha256" = encode(sha256(convert_to("research_submission_materials"."record"->'material'->>'content','UTF8')),'hex') AND "research_submission_materials"."record"->>'contentSha256' = "research_submission_materials"."content_sha256" AND "research_submission_materials"."record"->>'lineageRootMaterialId' = "research_submission_materials"."lineage_root_material_id"
+    )) IS TRUE`,
+    ),
+    check(
+      'research_submission_materials_confirmation_check',
+      sql`((
+      "research_submission_materials"."confirmed_by" IS NULL AND "research_submission_materials"."confirmed_at" IS NULL AND ("research_submission_materials"."record"->'material' = 'null'::jsonb OR "research_submission_materials"."record"->'material'->'firstHandConfirmation' = 'null'::jsonb)
+    ) OR (
+      "research_submission_materials"."confirmed_by" IS NOT NULL AND "research_submission_materials"."confirmed_at" IS NOT NULL AND "research_submission_materials"."material_id" IS NOT NULL AND "research_submission_materials"."record"->'material'->'firstHandConfirmation'->>'userId' = "research_submission_materials"."confirmed_by"::text AND ("research_submission_materials"."record"->'material'->'firstHandConfirmation'->>'confirmedAt')::timestamptz = "research_submission_materials"."confirmed_at" AND ("research_submission_materials"."record"->'material'->'firstHandConfirmation'->>'materialVersion')::integer = "research_submission_materials"."material_version"
+    )) IS TRUE`,
+    ),
+  ],
+);
+
+export const researchSubmissions = pgTable(
+  'research_submissions',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    authorizationId: uuid('authorization_id').notNull(),
+    baseResultId: text('base_result_id').notNull(),
+    questionIds: jsonb('question_ids').$type<string[]>().notNull(),
+    gapIds: jsonb('gap_ids').$type<string[]>().notNull(),
+    officialSiteGrants: jsonb('official_site_grants')
+      .$type<{ origin: string; pathPrefix: string }[]>()
+      .notNull(),
+    submittedBy: uuid('submitted_by')
+      .notNull()
+      .references(() => members.id),
+    submittedAt: time('submitted_at').notNull(),
+  },
+  (t) => [
+    unique('research_submissions_scope_id_key').on(t.taskId, t.attemptId, t.id),
+    unique('research_submissions_authorization_key').on(t.authorizationId),
+    foreignKey({
+      name: 'research_submissions_authorization_fk',
+      columns: [t.taskId, t.attemptId, t.authorizationId],
+      foreignColumns: [
+        researchAuthorizations.taskId,
+        researchAuthorizations.attemptId,
+        researchAuthorizations.id,
+      ],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'research_submissions_result_fk',
+      columns: [t.attemptId, t.baseResultId],
+      foreignColumns: [executionSteps.attemptId, executionSteps.resultId],
+    }).onDelete('restrict'),
+    check(
+      'research_submissions_arrays_check',
+      sql`jsonb_typeof("research_submissions"."question_ids") = 'array' AND jsonb_array_length("research_submissions"."question_ids") > 0 AND jsonb_typeof("research_submissions"."gap_ids") = 'array' AND jsonb_typeof("research_submissions"."official_site_grants") = 'array'`,
+    ),
+    index('research_submissions_task_idx').on(t.taskId, t.submittedAt),
+  ],
+);
+
+export const researchAuthorizations = pgTable(
+  'research_authorizations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    selectionId: uuid('selection_id').notNull(),
+    mode: text('mode').$type<'initial' | 'supplement'>().notNull(),
+    scope: jsonb('scope').$type<ResearchAuthorizationScope | Record<string, unknown>>().notNull(),
+    baseResultId: text('base_result_id'),
+    authorizedBy: uuid('authorized_by')
+      .notNull()
+      .references(() => members.id),
+    authorizedAt: time('authorized_at').notNull().defaultNow(),
+    consumedAt: time('consumed_at'),
+    consumedByStepId: uuid('consumed_by_step_id'),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('research_authorizations_attempt_id_key').on(t.attemptId, t.id),
+    unique('research_authorizations_scope_key').on(t.taskId, t.attemptId, t.id),
+    unique('research_authorizations_step_key').on(t.consumedByStepId),
+    uniqueIndex('research_authorizations_initial_idx')
+      .on(t.attemptId)
+      .where(sql`${t.mode} = 'initial'`),
+    uniqueIndex('research_authorizations_pending_idx')
+      .on(t.attemptId)
+      .where(sql`${t.consumedAt} IS NULL`),
+    foreignKey({
+      name: 'research_authorizations_attempt_fk',
+      columns: [t.taskId, t.attemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }).onDelete('restrict'),
+    // Deliberately task-scoped: a new attempt reuses the original immutable selection.
+    foreignKey({
+      name: 'research_authorizations_selection_fk',
+      columns: [t.taskId, t.selectionId],
+      foreignColumns: [projectSelections.taskId, projectSelections.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'research_authorizations_base_result_fk',
+      columns: [t.attemptId, t.baseResultId],
+      foreignColumns: [executionSteps.attemptId, executionSteps.resultId],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'research_authorizations_consumed_step_fk',
+      columns: [t.attemptId, t.consumedByStepId, t.id],
+      foreignColumns: [executionSteps.attemptId, executionSteps.id, executionSteps.authorizationId],
+    }).onDelete('restrict'),
+    check(
+      'research_authorizations_mode_check',
+      sql`"research_authorizations"."mode" IN ('initial','supplement')`,
+    ),
+    check(
+      'research_authorizations_scope_check',
+      sql`jsonb_typeof("research_authorizations"."scope") = 'object'`,
+    ),
+    check(
+      'research_authorizations_base_check',
+      sql`("research_authorizations"."mode" = 'initial' AND "research_authorizations"."base_result_id" IS NULL) OR ("research_authorizations"."mode" = 'supplement' AND "research_authorizations"."base_result_id" IS NOT NULL)`,
+    ),
+    check(
+      'research_authorizations_consumption_check',
+      sql`("research_authorizations"."consumed_at" IS NULL AND "research_authorizations"."consumed_by_step_id" IS NULL) OR ("research_authorizations"."consumed_at" IS NOT NULL AND "research_authorizations"."consumed_by_step_id" IS NOT NULL AND "research_authorizations"."consumed_at" >= "research_authorizations"."authorized_at")`,
+    ),
+  ],
+);
+
+export const projectSelections = pgTable(
+  'project_selections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    hotListSnapshotId: uuid('hot_list_snapshot_id').notNull(),
+    candidateId: text('candidate_id').notNull(),
+    project: jsonb('project').$type<SelectedProject>().notNull(),
+    selectedBy: uuid('selected_by')
+      .notNull()
+      .references(() => members.id),
+    selectedAt: time('selected_at').notNull().defaultNow(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('project_selections_task_key').on(t.taskId),
+    unique('project_selections_task_id_key').on(t.taskId, t.id),
+    foreignKey({
+      name: 'project_selections_attempt_fk',
+      columns: [t.taskId, t.attemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'project_selections_snapshot_fk',
+      columns: [t.taskId, t.attemptId, t.hotListSnapshotId],
+      foreignColumns: [
+        githubHotSnapshots.taskId,
+        githubHotSnapshots.attemptId,
+        githubHotSnapshots.id,
+      ],
+    }).onDelete('restrict'),
+    check(
+      'project_selections_project_check',
+      sql`(length(btrim("project_selections"."candidate_id")) > 0 AND jsonb_typeof("project_selections"."project") = 'object' AND "project_selections"."project"->>'selectionId' = "project_selections"."id"::text AND "project_selections"."project"->>'candidateId' = "project_selections"."candidate_id" AND "project_selections"."project"->>'hotListSnapshotId' = "project_selections"."hot_list_snapshot_id"::text) IS TRUE`,
+    ),
+  ],
+);
+
+export const githubHotSnapshots = pgTable(
+  'github_hot_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    provider: text('provider').$type<'xxapi'>().notNull(),
+    snapshot: jsonb('snapshot')
+      .$type<{
+        list: GithubHotList;
+        rawResponse: unknown;
+        parserVersion: string;
+      }>()
+      .notNull(),
+    fetchedAt: time('fetched_at').notNull(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('github_hot_snapshots_task_id_key').on(t.taskId, t.id),
+    unique('github_hot_snapshots_scope_id_key').on(t.taskId, t.attemptId, t.id),
+    unique('github_hot_snapshots_attempt_key').on(t.taskId, t.attemptId),
+    foreignKey({
+      name: 'github_hot_snapshots_attempt_fk',
+      columns: [t.taskId, t.attemptId],
+      foreignColumns: [executionAttempts.taskId, executionAttempts.id],
+    }).onDelete('restrict'),
+    check('github_hot_snapshots_provider_check', sql`"github_hot_snapshots"."provider" = 'xxapi'`),
+    check(
+      'github_hot_snapshots_snapshot_check',
+      sql`(jsonb_typeof("github_hot_snapshots"."snapshot") = 'object' AND jsonb_typeof("github_hot_snapshots"."snapshot"->'list') = 'object' AND "github_hot_snapshots"."snapshot"->'list'->>'id' = "github_hot_snapshots"."id"::text AND "github_hot_snapshots"."snapshot"->'list'->>'provider' = "github_hot_snapshots"."provider" AND ("github_hot_snapshots"."snapshot"->'list'->>'fetchedAt')::timestamptz = "github_hot_snapshots"."fetched_at" AND jsonb_typeof("github_hot_snapshots"."snapshot"->'list'->'items') = 'array' AND length(btrim("github_hot_snapshots"."snapshot"->>'parserVersion')) > 0 AND "github_hot_snapshots"."snapshot" ? 'rawResponse') IS TRUE`,
+    ),
+  ],
+);
+
+export interface AgentSnapshot {
+  executorVersion: 1;
+  mode: 'agent';
+  /** Versioned runtime configuration, never a substitute for research persistence. */
+  configuration: Record<string, unknown>;
+}

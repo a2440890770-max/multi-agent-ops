@@ -1,5 +1,8 @@
 export const executionLabels = {
   awaiting_clarification: '待澄清',
+  awaiting_selection: '待选题',
+  awaiting_materials: '待补资料',
+  awaiting_content: '待创作',
   queued: '排队中',
   running: '执行中',
   manual_required: '待人工处理',

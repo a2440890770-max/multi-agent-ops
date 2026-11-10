@@ -23,7 +23,7 @@ import type {
   ExecutionBudget,
   ClarificationAnswer,
 } from './domain.js';
-import type { ApiError, Page, SaveContentResult } from './api.js';
+import type { ApiError, Page, SaveContentResult, ResearchCommandResult } from './api.js';
 
 /** OpenAPI response schemas are generated from this map; do not duplicate DTOs in the backend. */
 export interface ResponseModels {
@@ -43,6 +43,29 @@ export interface ResponseModels {
   TaskDetail: TaskDetail;
   Tasks: Page<TaskSummary>;
   SaveContent: SaveContentResult;
+  ResearchCommand: ResearchCommandResult;
+  ResearchResult: import('./schemas/research.js').ResearchAcceptedResult;
+  ResearchResults: Page<{
+    id: string;
+    attemptId: string;
+    version: number;
+    parentResultId: string | null;
+    status: 'completed' | 'partial';
+    summary: string;
+    createdAt: string;
+  }>;
+  ResearchSubmission: {
+    id: string;
+    attemptId: string;
+    authorizationId: string;
+    baseResultId: string;
+    questionIds: string[];
+    gapIds: string[];
+    officialSiteGrants: { origin: string; pathPrefix: string }[];
+    submittedBy: string;
+    submittedAt: string;
+    records: import('./schemas/research-commands.js').ResearchSubmissionRecord[];
+  };
   ContentVersion: ContentVersion;
   ContentVersions: Page<ContentVersion>;
   CompareVersions: {

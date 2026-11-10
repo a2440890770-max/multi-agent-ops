@@ -99,6 +99,20 @@
       "when": 1793692701604,
       "tag": "0013_d9_execution_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794137962730,
+      "tag": "0014_d9_research_persistence",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1794216899257,
+      "tag": "0015_d9_research_commands",
+      "breakpoints": true
     }
   ]
 }

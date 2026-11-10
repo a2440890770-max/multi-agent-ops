@@ -57,5 +57,17 @@ export interface SaveContentResult {
   content: ContentVersion;
   message: '新版本已保存，需要提交审核';
 }
+export interface ResearchCommandResult {
+  task: TaskDetail;
+  selection: import('./schemas/research.js').SelectedProject;
+  authorization: {
+    id: string;
+    attemptId: string;
+    mode: 'initial' | 'supplement';
+    baseResultId: string | null;
+    consumedAt: null;
+  };
+  submissionId: string | null;
+}
 export type PublishRequest = OperationBodies['publishContent'];
 export type VerificationRequest = OperationBodies['verifyPublication'];

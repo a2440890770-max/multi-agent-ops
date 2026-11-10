@@ -2,8 +2,30 @@ import type { Role } from './domain.js';
 import type { ErrorCode } from './api.js';
 import type { ResponseModels } from './responses.js';
 import { responseSchemas } from './generated/response-schemas.js';
+import { z } from 'zod';
+import {
+  SelectProjectAndAuthorizeResearchSchema,
+  RetryResearchAndAuthorizeSchema,
+  SubmitMaterialsAndAuthorizeResearchSchema,
+} from './schemas/research-commands.js';
+
+// Use the same Zod structures at the HTTP boundary and inside the transaction service.
+// JSON Schema cannot express cross-record checks; the service also parses with Zod.
+function researchBody(schema: z.ZodType): Schema {
+  const convert: (value: unknown) => unknown = (value) => {
+    if (Array.isArray(value)) return value.map(convert);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => key !== '$schema')
+        .map(([key, child]) => (key === 'const' ? ['enum', [child]] : [key, convert(child)])),
+    );
+  };
+  return convert(z.toJSONSchema(schema, { target: 'draft-7' })) as Schema;
+}
 
 export type Schema = {
+  anyOf?: Schema[];
   type?: string | string[];
   properties?: Record<string, Schema>;
   required?: readonly string[];
@@ -309,6 +331,9 @@ export const endpoints: readonly Endpoint[] = [
         lifecycle: choice('open', 'terminated', 'published'),
         execution: choice(
           'awaiting_clarification',
+          'awaiting_selection',
+          'awaiting_materials',
+          'awaiting_content',
           'queued',
           'running',
           'manual_required',
@@ -371,7 +396,7 @@ export const endpoints: readonly Endpoint[] = [
     }),
     response: 'TaskDetail',
     conditions:
-      '同团队、任务 open、当前模拟 attempt=awaiting_clarification，无取消意图；原子比较 expectedRevision 与 attemptId；仅接受当前未答问题的非空答复，追加记录答复人和时间，不覆盖历史；部分答复保持待澄清，全部答复后继续同一次尝试，保留原始输入和已完成步骤；当前不进行语义充分性或冲突判断。',
+      '同团队、任务 open、当前 attempt=awaiting_clarification，执行模式与当前执行器一致，无取消意图；原子比较 expectedRevision 与 attemptId；追加当前未答问题的非空答复，不覆盖历史。部分答复继续等待；全部答复后继续同一 attempt。agent 模式新增 Supervisor 步骤并重新判断答复语义，不重复抓榜；mock 模式保留非空判断。',
     transitions: ['E02', 'E03'],
     audit: 'task.clarified',
     ac: ['AC-02'],
@@ -386,7 +411,7 @@ export const endpoints: readonly Endpoint[] = [
       ['expectedRevision'],
     ),
     response: 'TaskDetail',
-    conditions: `${taskRules}尚无完整尝试且无遗留执行状态；D4 仅模拟执行，无账号也可验证；simulationScenario 默认 success，可选 failure/clarification；输入及模拟器 v1 配置冻结，计数=0；创建 queued 尝试和步骤，清空当前产出。`,
+    conditions: `${taskRules}尚无完整尝试且无遗留执行状态；按服务端配置创建 mock 或 agent 尝试。mock 的 simulationScenario 默认 success；agent 拒绝模拟情形，冻结运行配置、计价和账号上下文，创建热榜及 Supervisor 步骤；启动仅授权榜单获取及任务判断，Research 需另行选题并明确授权，启动任务本身不授权深入研究。`,
     transitions: ['E01', 'A05'],
     audit: 'attempt.started',
     ac: ['AC-01', 'AC-03', 'AC-05'],
@@ -399,7 +424,7 @@ export const endpoints: readonly Endpoint[] = [
     body: input({ ...revision, reason }),
     response: 'TaskDetail',
     conditions:
-      '当前模拟尝试待澄清/queued/running，任务 open；模拟执行无外部调用，在同一事务记录取消、隔离旧 generation 并确认停止后解锁；任务仍 open。真实执行的异步停止尚未实现。',
+      '当前尝试属于活跃状态，任务 open；事务记录取消并隔离旧 generation，拒绝迟到结果，任务仍 open。agent 模式通过心跳撤销执行权和 HTTP 断开取消远端 SDK；保留未知消耗预占额度，不自动重发。',
     transitions: ['E10', 'E11', 'E12'],
     audit: 'attempt.stop_requested / attempt.stopped',
     ac: ['AC-07'],
@@ -421,10 +446,85 @@ export const endpoints: readonly Endpoint[] = [
     ),
     response: 'TaskDetail',
     conditions:
-      'D4 仅开放任务的模拟重试，restartTerminated 必须 false；previousAttemptId 匹配当前已结束尝试，无工作槽；新 attemptNo，从头执行并保留旧记录；simulationScenario 默认 success，可选 failure/clarification；已终止任务的重启后续实现。',
+      'restartTerminated 必须 false；previousAttemptId 匹配当前已结束尝试，无工作槽；按当前执行器模式新增 attemptNo 并保留旧历史和任务累计预算。agent 模式拒绝 simulationScenario，从头获取榜单和判断任务；已有选题的研究续接留待下一阶段，当前显式阻断。',
     transitions: ['E13', 'A05'],
     audit: 'attempt.retried / task.reopened',
     ac: ['AC-03', 'AC-05', 'AC-07'],
+  }),
+  endpoint({
+    operationId: 'selectProjectAndAuthorizeResearch',
+    method: 'POST',
+    path: '/tasks/:taskId/project-selection',
+    summary: '选定项目并授权初次研究',
+    body: researchBody(SelectProjectAndAuthorizeResearchSchema),
+    response: 'ResearchCommand',
+    conditions:
+      '当前真实 attempt 等待选题、无租约/取消/发布锁；候选属于冻结榜单；任务只能选一次。选题、未消耗 initial 授权、Supervisor 排队、revision、审计和幂等响应同事务。authorizeResearch 必须 true。Research 未显式配置或存储未就绪时拒绝执行；202 仅表示排队，实际分派时才消耗授权。',
+    transitions: [],
+    audit: 'research.project_selected_and_authorized',
+    ac: ['D9-TX-01', 'D9-TX-04', 'D9-TX-05'],
+  }),
+  endpoint({
+    operationId: 'listResearchResults',
+    method: 'GET',
+    path: '/tasks/:taskId/research-results',
+    summary: '查看研究报告版本历史',
+    query: object({ ...page, attemptId: id }, []),
+    response: 'ResearchResults',
+    conditions:
+      '同团队只读；默认当前 attempt，可查询历史 attempt。按版本倒序分页；旧报告只作历史查看，不能自动成为新轮输入。',
+    transitions: [],
+    audit: '访问日志',
+    ac: ['D9-REPORT-HISTORY'],
+  }),
+  endpoint({
+    operationId: 'getResearchResult',
+    method: 'GET',
+    path: '/tasks/:taskId/research-results/:resultId',
+    summary: '读取完整研究报告及证据',
+    response: 'ResearchResult',
+    conditions:
+      '同团队及同任务；返回校验后完整报告、来源、实际材料和本轮工具记录，不返回租约或服务凭据。',
+    transitions: [],
+    audit: '访问日志',
+    ac: ['D9-REPORT-EVIDENCE'],
+  }),
+  endpoint({
+    operationId: 'getResearchSubmission',
+    method: 'GET',
+    path: '/tasks/:taskId/research-submissions/:submissionId',
+    summary: '查看已提交资料与补查授权范围',
+    response: 'ResearchSubmission',
+    conditions: '同团队及同任务；读取不可变资料批次、一手确认及单轮官网范围；不产生新的访问授权。',
+    transitions: [],
+    audit: '访问日志',
+    ac: ['D9-MATERIAL-HISTORY'],
+  }),
+  endpoint({
+    operationId: 'retryResearchAndAuthorize',
+    method: 'POST',
+    path: '/tasks/:taskId/research-attempt-retries',
+    summary: '新建尝试并重新授权研究',
+    body: researchBody(RetryResearchAndAuthorizeSchema),
+    response: 'ResearchCommand',
+    conditions:
+      '已有选题，当前真实 attempt 为 failed/cancelled，任务 open 且无发布锁。新 attempt、新 initial 授权、指针/generation、批准失效、排队、revision、审计和幂等响应同事务。沿用原选题/榜单，不抓榜、不复用旧报告或旧补交资料/官网权限；预算累计不重置。Research 未就绪返回 503，无业务写入。',
+    transitions: [],
+    audit: 'research.attempt_retried_and_authorized',
+    ac: ['D9-TX-02', 'D9-TX-07', 'D9-TX-08'],
+  }),
+  endpoint({
+    operationId: 'submitMaterialsAndAuthorizeResearch',
+    method: 'POST',
+    path: '/tasks/:taskId/research-supplements',
+    summary: '提交可选资料并授权补查',
+    body: researchBody(SubmitMaterialsAndAuthorizeResearchSchema),
+    response: 'ResearchCommand',
+    conditions:
+      '当前真实 attempt 为 awaiting_materials/awaiting_content，无租约/取消/其他工作/待用授权/发布锁。基版必须为当前 attempt 最新完整报告，只选该报告已有问题及关联缺口。允许零资料；新资料/确认、提交批次、supplement 授权及排队同事务。官网范围仅本轮生效，一手确认由宿主绑定文本版本；不抓取链接。Research 未就绪返回 503，无业务写入。',
+    transitions: [],
+    audit: 'research.materials_submitted_and_authorized',
+    ac: ['D9-TX-03', 'D9-TX-06', 'D9-TX-14', 'D9-TX-15'],
   }),
   endpoint({
     operationId: 'terminateTask',
@@ -1030,7 +1130,13 @@ export function getOpenApiDocument() {
                   'updateConfig',
                 ].includes(e.operationId)
               ? '人工编辑审核真实持久化响应；无需 Agent，写入比较资源版本并支持幂等重放。'
-              : '业务实现后的成功响应；当前校验授权后返回 501 占位；发布另有失效批准拒绝校验。',
+              : [
+                    'selectProjectAndAuthorizeResearch',
+                    'retryResearchAndAuthorize',
+                    'submitMaterialsAndAuthorizeResearch',
+                  ].includes(e.operationId)
+                ? '原子持久化研究命令的提交时快照；未启用时返回 503，202 不代表研究已开始或完成。'
+                : '业务实现后的成功响应；当前校验授权后返回 501 占位；发布另有失效批准拒绝校验。',
       content: {
         'application/json': {
           schema: {
@@ -1082,6 +1188,12 @@ export function getOpenApiDocument() {
         'stopAttempt',
         'taskHistory',
         'clarifyTask',
+        'selectProjectAndAuthorizeResearch',
+        'retryResearchAndAuthorize',
+        'submitMaterialsAndAuthorizeResearch',
+        'listResearchResults',
+        'getResearchResult',
+        'getResearchSubmission',
         'listContent',
         'getContent',
         'compareContent',
@@ -1106,7 +1218,7 @@ export function getOpenApiDocument() {
       title: 'Multi-Agent Ops D1 接口契约',
       version: '0.1.0',
       description:
-        '已实现 Session 登录、业务权限、任务创建与查询、模拟执行和澄清恢复，以及无需 Agent 的不可变文案版本、人工编辑、基础审核、主观裁决、允许自批的版本批准和账号配置。编辑、新执行、配置变更使旧批准失效。实际对外发布与真实 Agent 执行尚未接通；其他未实现业务明确返回 501。',
+        '已实现 Session、业务权限、任务创建/查询、模拟执行及真实 Supervisor 热榜/澄清/等待选题流程，以及人工编辑审核和批准。D9 三个研究命令已实现共享契约与原子事务；Research 执行链与报告查询已接线并离线验证；默认关闭，须显式配置并完成迁移后启用，Supervisor 已验证真实结构化输出；Research 供应商链路尚待真实验收。其他未实现业务明确返回 501。',
     },
     paths,
     components: {
