@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { z } from 'zod';
-import { validateStructuredResult } from './structured-model.js';
+import { validateStructuredResult, StructuredOutputValidationError } from './structured-model.js';
 
 const schema = z.strictObject({
   versionId: z.string(),
@@ -14,6 +14,47 @@ const data = {
   issues: [{ blocking: true, reason: 'Test issue' }],
 };
 const success = { subtype: 'success', is_error: false } as const;
+
+test('结构化失败保留存在性、类型和字段路径，既不泄露值也不保存普通文本', () => {
+  assert.throws(
+    () => validateStructuredResult(success, schema),
+    (e: unknown) => {
+      assert.ok(e instanceof StructuredOutputValidationError);
+      assert.deepEqual(e.diagnostic, {
+        hasStructuredOutput: false,
+        outputType: 'undefined',
+        errorType: 'missing_structured_output',
+        issues: [],
+      });
+      return true;
+    },
+  );
+  assert.throws(
+    () =>
+      validateStructuredResult(
+        {
+          ...success,
+          structured_output: {
+            ...data,
+            issues: [{ blocking: 'private-value', reason: 'secret-text' }],
+          },
+        },
+        schema,
+      ),
+    (e: unknown) => {
+      assert.ok(e instanceof StructuredOutputValidationError);
+      assert.deepEqual(e.diagnostic, {
+        hasStructuredOutput: true,
+        outputType: 'object',
+        errorType: 'schema_validation_failed',
+        issues: [{ path: 'issues.0.blocking', code: 'invalid_type' }],
+      });
+      assert.ok(!JSON.stringify(e.diagnostic).includes('private-value'));
+      assert.ok(!e.message.includes('secret-text'));
+      return true;
+    },
+  );
+});
 
 test('只有 SDK 成功且 structured_output 通过 Schema 才返回可用数据', () => {
   assert.deepEqual(validateStructuredResult({ ...success, structured_output: data }, schema), data);

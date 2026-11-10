@@ -122,3 +122,7 @@ npm run check
 ## D9 第二批：执行控制与预算账本
 
 `0013_d9_execution_limits.sql` 增加执行限制快照、有效执行累计时间、步骤技术重试次数及到期时间，新增任务预算及逐次调用记录。调用身份和终态不可改写，任务预算上限与历史调用次数不可重置。迁移只补结构，旧错误、版本和历史保持不变，不追溯伪造旧调用消耗；升级前需停止全部旧执行器。详见 [第二批验收](../../docs/acceptance/execution-limits.md)。
+
+## D9 研究存储
+
+本 PR 追加 `0014_d9_research_persistence.sql` 和 `0015_d9_research_commands.sql`。它们建立榜单、选题、授权、网页登记及资料提交存储。启用 Research 前按既有备份和迁移流程执行 `npm run db:migrate`；运行时只检查存储就绪，不自动应用迁移。

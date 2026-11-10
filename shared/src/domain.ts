@@ -17,6 +17,9 @@ export type Permission = (typeof permissions.admin)[number];
 export type Lifecycle = 'open' | 'terminated' | 'published';
 export type ExecutionStatus =
   | 'awaiting_clarification'
+  | 'awaiting_selection'
+  | 'awaiting_materials'
+  | 'awaiting_content'
   | 'queued'
   | 'running'
   | 'manual_required'
@@ -389,6 +392,7 @@ export interface AgentStep {
   };
   error: Failure | null;
   traceUrl: string | null;
+  supervisorOutput?: import('./schemas/supervisor.js').SupervisorOutput | null;
 }
 export interface WorkLock {
   ownerType: 'attempt' | 'manual_review';
@@ -450,6 +454,25 @@ export interface TaskDetail extends TaskSummary {
   workLock: WorkLock | null;
   actions: Record<TaskAction, ActionAvailability>;
   account: Account | null;
+  agentExecution?: {
+    executorMode: 'mock' | 'agent' | 'disabled';
+    hotList: import('./schemas/research.js').GithubHotList | null;
+    lastDecision: import('./schemas/supervisor.js').SupervisorOutput | null;
+    research?: {
+      selectedProject: import('./schemas/research.js').SelectedProject | null;
+      pendingAuthorization: {
+        id: Id;
+        mode: 'initial' | 'supplement';
+        baseResultId: Id | null;
+      } | null;
+      latestReport: { id: Id; version: number } | null;
+      actions: {
+        selectProject: ActionAvailability;
+        retryResearch: ActionAvailability;
+        supplementResearch: ActionAvailability;
+      };
+    };
+  };
 }
 export interface ConfigVersion {
   version: number;

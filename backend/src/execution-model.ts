@@ -8,7 +8,14 @@ export const mockStages = [
   { role: 'review', label: '模拟检查产出' },
 ] as const;
 export const activeAttempt = (status: string) =>
-  ['queued', 'running', 'awaiting_clarification'].includes(status);
+  [
+    'queued',
+    'running',
+    'awaiting_clarification',
+    'awaiting_selection',
+    'awaiting_materials',
+    'awaiting_content',
+  ].includes(status);
 
 export function attemptModel(row: typeof executionAttempts.$inferSelect): ExecutionAttempt {
   return {
@@ -65,7 +72,7 @@ export function stepModel(row: typeof executionSteps.$inferSelect, outputId?: st
     reviewCycleId: null,
     role: row.role,
     status: row.status,
-    inputVersionRefs: [],
+    inputVersionRefs: row.inputSnapshotId ? [row.inputSnapshotId] : [],
     outputVersionRefs:
       row.role === 'content' && row.status === 'completed' && outputId ? [outputId] : [],
     sourceRefs: [],
@@ -79,5 +86,7 @@ export function stepModel(row: typeof executionSteps.$inferSelect, outputId?: st
     },
     error: row.error,
     traceUrl: null,
+    supervisorOutput:
+      row.validatedOutput && 'decision' in row.validatedOutput ? row.validatedOutput : null,
   };
 }

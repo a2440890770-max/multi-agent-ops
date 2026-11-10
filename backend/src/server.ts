@@ -6,15 +6,29 @@ import { createBusinessDatabase } from './database.js';
 import { AuthService } from './auth.js';
 import { TaskService } from './task-service.js';
 import { MockTaskExecutor } from './mock-task-executor.js';
+import { AgentClient } from './agent-client.js';
+import { AgentTaskExecutor } from './agent-task-executor.js';
+import { ResearchExecutionService } from './research-execution-service.js';
+import { assertResearchPersistence } from './research-readiness.js';
 
 const business = config.databaseUrl ? createBusinessDatabase(config.databaseUrl) : undefined;
 const auth = business && config.auth ? new AuthService(business.db, config.auth) : undefined;
-const executor = business
-  ? new MockTaskExecutor(business.db, {
-      ...config.taskExecutorPolicy,
-      enabled: config.taskExecutorMode === 'mock',
-    })
-  : undefined;
+const agentExecutor =
+  business && config.taskExecutorMode === 'agent'
+    ? new AgentTaskExecutor(
+        business.db,
+        new AgentClient({ baseUrl: config.agentBaseUrl, serviceToken: config.agentServiceToken! }),
+        config.taskExecutorPolicy,
+      )
+    : undefined;
+const executor =
+  agentExecutor ??
+  (business
+    ? new MockTaskExecutor(business.db, {
+        ...config.taskExecutorPolicy,
+        enabled: config.taskExecutorMode === 'mock',
+      })
+    : undefined);
 
 const pool = config.databaseUrl
   ? new pg.Pool({
@@ -25,12 +39,30 @@ const pool = config.databaseUrl
   : undefined;
 pool?.on('error', () => console.error('数据库空闲连接异常，请检查本地数据库状态。'));
 const app = createApp({
+  ...(agentExecutor
+    ? {
+        agentRuns: {
+          serviceToken: config.agentServiceToken!,
+          checkRun: (body: unknown) => agentExecutor.checkRun(body),
+          ...(business
+            ? {
+                researchCallback: (body: unknown) =>
+                  new ResearchExecutionService(business.db).handle(body),
+              }
+            : {}),
+        },
+      }
+    : {}),
   ...(auth ? { auth } : {}),
   ...(business
     ? {
         tasks: new TaskService(business.db, () => new Date(), {
           executorMode: config.taskExecutorMode,
           executionLimits: config.executionLimits,
+          ...(config.agentConfiguration ? { agentConfiguration: config.agentConfiguration } : {}),
+          ...(config.agentConfiguration?.research
+            ? { researchPolicy: config.agentConfiguration.research.policy }
+            : {}),
         }),
       }
     : {}),
@@ -54,6 +86,7 @@ const app = createApp({
 if (business && !config.auth)
   app.log.warn('登录服务未启用：缺少 AUTH_SECRET。请运行 npm run env:setup 后重启后端。');
 app.addHook('onReady', async () => {
+  if (business && config.agentConfiguration?.research) await assertResearchPersistence(business.db);
   executor?.start();
 });
 app.addHook('onClose', async () => {

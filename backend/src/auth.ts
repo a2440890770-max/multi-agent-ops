@@ -10,7 +10,7 @@ import {
 } from 'node:crypto';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { permissions } from '@multi-agent-ops/shared';
-import type { ErrorCode, Role, Session } from '@multi-agent-ops/shared';
+import type { ApiError, ErrorCode, Role, Session } from '@multi-agent-ops/shared';
 import type { createBusinessDatabase } from './database.js';
 import type { AuthConfig } from './auth-config.js';
 import { auditEvents, idempotencyRecords, members, sessions } from './schema.js';
@@ -29,6 +29,7 @@ export class AuthError extends Error {
     public code: ErrorCode,
     message: string,
     public retryAfter?: number,
+    public details?: Pick<ApiError['error'], 'fieldErrors' | 'conflict'>,
   ) {
     super(message);
   }

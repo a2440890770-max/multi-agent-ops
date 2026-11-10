@@ -5,7 +5,13 @@ import { format } from 'prettier';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const file = `${root}shared/src/responses.ts`;
-const program = ts.createProgram([file], { strict: true, target: ts.ScriptTarget.ES2023 });
+const program = ts.createProgram([file], {
+  strict: true,
+  target: ts.ScriptTarget.ES2023,
+  module: ts.ModuleKind.NodeNext,
+  moduleResolution: ts.ModuleResolutionKind.NodeNext,
+  skipLibCheck: true,
+});
 const checker = program.getTypeChecker();
 const source = program.getSourceFile(file);
 const models = source.statements.find(

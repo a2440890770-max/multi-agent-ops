@@ -7,7 +7,9 @@ test('本地启用显式模拟执行，生产默认关闭且拒绝模拟模式',
   assert.equal(readExecutorMode({ TASK_EXECUTOR_MODE: 'disabled' }), 'disabled');
   assert.equal(readExecutorMode({ NODE_ENV: 'production' }), 'disabled');
   assert.throws(() => readExecutorMode({ NODE_ENV: 'production', TASK_EXECUTOR_MODE: 'mock' }));
-  assert.throws(() => readExecutorMode({ TASK_EXECUTOR_MODE: 'agent' }));
+  assert.equal(readExecutorMode({ TASK_EXECUTOR_MODE: 'agent' }), 'agent');
+  assert.equal(readExecutorMode({ NODE_ENV: 'production', TASK_EXECUTOR_MODE: 'agent' }), 'agent');
+  assert.throws(() => readExecutorMode({ TASK_EXECUTOR_MODE: 'unknown' }));
 });
 
 test('执行器默认单并发，配置拒绝无法安全续租或无界并发的参数', () => {
@@ -41,7 +43,7 @@ test('第二批默认120秒调用及跨尝试预算，拒绝无界或矛盾的�
     retryBaseMs: 2000,
     maxCalls: 50,
     maxTokens: 100000,
-    maxCostMicrosCny: 10000000,
+    maxCostMicrosCny: 1000000,
   });
   for (const env of [
     { TASK_CALL_TIMEOUT_MS: '0' },

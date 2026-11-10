@@ -5,6 +5,7 @@ import { registerAuthRoutes } from './auth-routes.js';
 import type { AuthService } from './auth.js';
 import type { TaskService } from './task-service.js';
 import type { Writable } from 'node:stream';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 type Dependencies = {
   checkDatabase: () => Promise<DatabaseReadiness>;
@@ -21,6 +22,10 @@ type Dependencies = {
     | 'terminate'
     | 'history'
     | 'clarify'
+    | 'researchCommand'
+    | 'listResearchResults'
+    | 'getResearchResult'
+    | 'getResearchSubmission'
     | 'editorial'
     | 'accountRegistration'
     | 'manualPublicationEntry'
@@ -32,6 +37,13 @@ type Dependencies = {
   >;
   logging?: boolean;
   logStream?: Writable;
+  agentRuns?: {
+    serviceToken: string;
+    checkRun: (body: unknown) => Promise<boolean>;
+    researchCallback?: (
+      body: unknown,
+    ) => Promise<{ accepted: boolean; replayed?: boolean; execute?: boolean }>;
+  };
 };
 
 export function createApp(dependencies: Dependencies) {
@@ -52,6 +64,7 @@ export function createApp(dependencies: Dependencies) {
               'token',
               'csrfToken',
               'res.headers["set-cookie"]',
+              'req.body.lease',
             ],
           },
     ajv: { customOptions: { removeAdditional: false, coerceTypes: 'array' } },
@@ -59,6 +72,39 @@ export function createApp(dependencies: Dependencies) {
   });
   registerAuthRoutes(app, dependencies.auth);
   registerContractRoutes(app, dependencies.auth, dependencies.tasks);
+  app.post('/internal/v1/agent-runs/check', { bodyLimit: 16_384 }, async (request, reply) => {
+    const service = dependencies.agentRuns;
+    if (!service) return reply.code(503).send({ allowed: false });
+    const digest = (value: string) => createHash('sha256').update(value).digest();
+    if (
+      !timingSafeEqual(
+        digest(request.headers.authorization ?? ''),
+        digest(`Bearer ${service.serviceToken}`),
+      )
+    )
+      return reply.code(401).send({ allowed: false });
+    const allowed = await service.checkRun(request.body);
+    return reply.code(allowed ? 200 : 409).send({ allowed });
+  });
+  app.post(
+    '/internal/v1/research/events',
+    { bodyLimit: 16 * 1024 * 1024 },
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      const service = dependencies.agentRuns;
+      if (!service?.researchCallback) return reply.code(503).send({ accepted: false });
+      const digest = (value: string) => createHash('sha256').update(value).digest();
+      if (
+        !timingSafeEqual(
+          digest(request.headers.authorization ?? ''),
+          digest(`Bearer ${service.serviceToken}`),
+        )
+      )
+        return reply.code(401).send({ accepted: false });
+      const result = await service.researchCallback(request.body);
+      return reply.code(result.accepted ? 200 : 409).send(result);
+    },
+  );
   app.get('/api/health', async (): Promise<ServiceHealth> => ({
     service: 'backend',
     status: 'ok',

@@ -1,0 +1,249 @@
+{
+  "context": {
+    "schemaVersion": "1.0",
+    "execution": {
+      "taskId": "task-1",
+      "attemptId": "attempt-1",
+      "stepId": "research-step-1",
+      "inputSnapshotId": "snapshot-1"
+    },
+    "authorization": {
+      "id": "auth-1",
+      "mode": "initial"
+    },
+    "selectedProject": {
+      "selectionId": "selection-1",
+      "candidateId": "candidate-1",
+      "hotListSnapshotId": "hot-list-1",
+      "name": "owner/project",
+      "repositoryUrl": "https://github.com/owner/project"
+    },
+    "request": {
+      "topic": "owner/project",
+      "objective": "核实选中项目的功能及限制。",
+      "questions": [
+        {
+          "id": "q-1",
+          "question": "这个项目提供什么功能？",
+          "severity": "core",
+          "reason": "项目介绍的核心信息。"
+        }
+      ],
+      "scope": {
+        "inclusions": ["选中项目"],
+        "exclusions": ["其他候选"]
+      },
+      "referenceIds": []
+    },
+    "contentContext": {
+      "audience": "对开源工具感兴趣的用户",
+      "purpose": "介绍项目功能和使用限制",
+      "platform": "douyin",
+      "format": "image_text",
+      "prohibitions": ["不得编造实测结果"]
+    },
+    "referenceMaterials": {
+      "sources": [],
+      "materials": []
+    },
+    "previousReport": null,
+    "supplementScope": null,
+    "runtimeContext": {
+      "now": "2026-11-08T00:00:00Z",
+      "timezone": "Asia/Shanghai",
+      "skills": [
+        {
+          "name": "github-project-research",
+          "version": "fixture-v1",
+          "requiredSections": [
+            {
+              "id": "features",
+              "title": "项目功能"
+            }
+          ]
+        }
+      ],
+      "requiredSearchSites": ["bilibili", "xiaohongshu", "douyin"],
+      "toolPolicyVersion": "research-tools-v1",
+      "configVersion": 1,
+      "limits": {
+        "timeoutMs": 600000,
+        "maxSearchCalls": 6,
+        "maxFetchCalls": 8,
+        "maxVideoCalls": 3,
+        "maxOutputAttempts": 3,
+        "maxBudgetUsd": 1
+      }
+    }
+  },
+  "result": {
+    "id": "research-1",
+    "version": 1,
+    "parentResultId": null,
+    "execution": {
+      "taskId": "task-1",
+      "attemptId": "attempt-1",
+      "stepId": "research-step-1",
+      "inputSnapshotId": "snapshot-1"
+    },
+    "authorizationId": "auth-1",
+    "selectedProject": {
+      "selectionId": "selection-1",
+      "candidateId": "candidate-1",
+      "hotListSnapshotId": "hot-list-1",
+      "name": "owner/project",
+      "repositoryUrl": "https://github.com/owner/project"
+    },
+    "report": {
+      "schemaVersion": "1.0",
+      "status": "completed",
+      "summary": "项目提供本地搜索界面。",
+      "questions": [
+        {
+          "id": "q-1",
+          "question": "这个项目提供什么功能？",
+          "severity": "core",
+          "reason": "项目介绍的核心信息。",
+          "origin": "supervisor",
+          "status": "answered",
+          "claimIds": ["fact-1"],
+          "gapIds": []
+        }
+      ],
+      "claims": [
+        {
+          "id": "fact-1",
+          "kind": "fact",
+          "statement": "项目提供本地搜索界面。",
+          "attribution": null,
+          "evidenceIds": ["evidence-1"],
+          "refutingEvidenceIds": [],
+          "premiseClaimIds": [],
+          "questionIds": ["q-1"],
+          "limitations": []
+        }
+      ],
+      "sections": [
+        {
+          "id": "section-1",
+          "title": "项目功能",
+          "requirementRef": "features",
+          "status": "supported",
+          "claimIds": ["fact-1"],
+          "gapIds": []
+        }
+      ],
+      "evidence": [
+        {
+          "id": "evidence-1",
+          "sourceId": "source-1",
+          "materialId": "material-1",
+          "excerpt": "This project provides a local search interface.",
+          "directness": "direct",
+          "locator": {
+            "kind": "text",
+            "startOffset": 0,
+            "endOffset": 47
+          }
+        }
+      ],
+      "gaps": [],
+      "conflicts": [],
+      "suggestedAngles": [],
+      "warnings": [],
+      "changes": []
+    },
+    "sources": [
+      {
+        "id": "source-1",
+        "label": "项目官方 README",
+        "url": "https://github.com/owner/project",
+        "nature": "primary",
+        "author": "owner",
+        "publishedAt": null
+      }
+    ],
+    "materials": [
+      {
+        "id": "material-1",
+        "sourceId": "source-1",
+        "version": 1,
+        "kind": "webpage_text",
+        "content": "This project provides a local search interface.",
+        "assetIds": [],
+        "capturedAt": "2026-11-08T00:00:00Z",
+        "truncated": false,
+        "coverage": null,
+        "firstHandConfirmation": null,
+        "segments": [],
+        "framePositions": []
+      }
+    ],
+    "toolAttempts": [
+      {
+        "id": "search-bilibili",
+        "toolUseId": "tool-bilibili",
+        "toolName": "WebSearch",
+        "site": "bilibili",
+        "query": "owner/project site:bilibili",
+        "sourceId": null,
+        "status": "no_results",
+        "errorCode": null,
+        "startedAt": "2026-11-08T00:00:00Z",
+        "finishedAt": "2026-11-08T00:00:00Z"
+      },
+      {
+        "id": "search-xiaohongshu",
+        "toolUseId": "tool-xiaohongshu",
+        "toolName": "WebSearch",
+        "site": "xiaohongshu",
+        "query": "owner/project site:xiaohongshu",
+        "sourceId": null,
+        "status": "no_results",
+        "errorCode": null,
+        "startedAt": "2026-11-08T00:00:00Z",
+        "finishedAt": "2026-11-08T00:00:00Z"
+      },
+      {
+        "id": "search-douyin",
+        "toolUseId": "tool-douyin",
+        "toolName": "WebSearch",
+        "site": "douyin",
+        "query": "owner/project site:douyin",
+        "sourceId": null,
+        "status": "no_results",
+        "errorCode": null,
+        "startedAt": "2026-11-08T00:00:00Z",
+        "finishedAt": "2026-11-08T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "promptVersion": "research-fixture-v1",
+      "toolPolicyVersion": "research-tools-v1",
+      "configVersion": 1,
+      "skills": [
+        {
+          "name": "github-project-research",
+          "version": "fixture-v1"
+        }
+      ],
+      "traceId": null,
+      "parentToolUseId": "dispatch-1",
+      "durationMs": 10
+    }
+  },
+  "hotList": {
+    "id": "hot-list-1",
+    "provider": "xxapi",
+    "fetchedAt": "2026-11-08T00:00:00Z",
+    "rankingDescription": null,
+    "items": [
+      {
+        "id": "candidate-1",
+        "title": "owner/project",
+        "description": "本地搜索工具",
+        "repositoryUrl": "https://github.com/owner/project"
+      }
+    ]
+  }
+}

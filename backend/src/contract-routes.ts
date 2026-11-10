@@ -1,5 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { endpoints, getOpenApiDocument } from '@multi-agent-ops/shared';
+import {
+  endpoints,
+  getOpenApiDocument,
+  RESEARCH_COMMAND_BODY_LIMIT,
+  SelectProjectAndAuthorizeResearchSchema,
+  RetryResearchAndAuthorizeSchema,
+  SubmitMaterialsAndAuthorizeResearchSchema,
+} from '@multi-agent-ops/shared';
 import type {
   ApiError,
   OperationBodies,
@@ -12,6 +19,12 @@ import { AuthError } from './auth.js';
 import type { AuthService } from './auth.js';
 import type { TaskService } from './task-service.js';
 import { editorialOperations } from './editorial-service.js';
+
+const researchRequests = {
+  selectProjectAndAuthorizeResearch: SelectProjectAndAuthorizeResearchSchema,
+  retryResearchAndAuthorize: RetryResearchAndAuthorizeSchema,
+  submitMaterialsAndAuthorizeResearch: SubmitMaterialsAndAuthorizeResearchSchema,
+};
 
 export function registerContractRoutes(
   app: FastifyInstance,
@@ -27,6 +40,10 @@ export function registerContractRoutes(
     | 'terminate'
     | 'history'
     | 'clarify'
+    | 'researchCommand'
+    | 'listResearchResults'
+    | 'getResearchResult'
+    | 'getResearchSubmission'
     | 'editorial'
     | 'accountRegistration'
     | 'manualPublicationEntry'
@@ -46,6 +63,31 @@ export function registerContractRoutes(
         method: endpoint.method,
         url: `/api/v1${endpoint.path}`,
         config: { requiredRoles: endpoint.roles },
+        ...(endpoint.operationId in researchRequests
+          ? {
+              bodyLimit: RESEARCH_COMMAND_BODY_LIMIT,
+              // Validate before AJV's general coercion: authorization must be JSON true.
+              preValidation: async (request) => {
+                const result = researchRequests[
+                  endpoint.operationId as keyof typeof researchRequests
+                ].safeParse(request.body);
+                if (!result.success)
+                  throw new AuthError(
+                    400,
+                    'VALIDATION_ERROR',
+                    '研究请求字段或授权范围无效。',
+                    undefined,
+                    {
+                      conflict: null,
+                      fieldErrors: result.error.issues.map((issue) => ({
+                        field: `body/${issue.path.join('/')}`,
+                        message: issue.message,
+                      })),
+                    },
+                  );
+              },
+            }
+          : {}),
         schema: {
           ...(endpoint.body ? { body: endpoint.body } : {}),
           ...(endpoint.query ? { querystring: endpoint.query } : {}),
@@ -72,6 +114,72 @@ export function registerContractRoutes(
           },
         },
         handler: async (request, reply) => {
+          if (
+            ['listResearchResults', 'getResearchResult', 'getResearchSubmission'].includes(
+              endpoint.operationId,
+            )
+          ) {
+            if (!tasks || !request.authSession)
+              throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '研究查询服务尚未配置。');
+            const params = request.params as {
+              taskId: string;
+              resultId: string;
+              submissionId: string;
+            };
+            const context = { taskId: params.taskId, actor: request.authSession.member };
+            const data =
+              endpoint.operationId === 'listResearchResults'
+                ? await tasks.listResearchResults({
+                    ...context,
+                    query: request.query as OperationQueries['listResearchResults'],
+                  })
+                : endpoint.operationId === 'getResearchResult'
+                  ? await tasks.getResearchResult({ ...context, resultId: params.resultId })
+                  : await tasks.getResearchSubmission({
+                      ...context,
+                      submissionId: params.submissionId,
+                    });
+            return { data, meta: { requestId: request.id, replayed: false } };
+          }
+          if (
+            [
+              'selectProjectAndAuthorizeResearch',
+              'retryResearchAndAuthorize',
+              'submitMaterialsAndAuthorizeResearch',
+            ].includes(endpoint.operationId)
+          ) {
+            if (!tasks) throw new AuthError(503, 'DEPENDENCY_UNAVAILABLE', '研究服务尚未配置。');
+            if (!request.authSession) throw new AuthError(401, 'UNAUTHENTICATED', '请重新登录。');
+            const common = {
+              taskId: (request.params as { taskId: string }).taskId,
+              actor: request.authSession.member,
+              key: request.headers['idempotency-key'] as string,
+              requestId: request.id,
+            };
+            const result = await tasks.researchCommand(
+              endpoint.operationId === 'selectProjectAndAuthorizeResearch'
+                ? {
+                    ...common,
+                    operation: 'selectProjectAndAuthorizeResearch',
+                    body: request.body as OperationBodies['selectProjectAndAuthorizeResearch'],
+                  }
+                : endpoint.operationId === 'retryResearchAndAuthorize'
+                  ? {
+                      ...common,
+                      operation: 'retryResearchAndAuthorize',
+                      body: request.body as OperationBodies['retryResearchAndAuthorize'],
+                    }
+                  : {
+                      ...common,
+                      operation: 'submitMaterialsAndAuthorizeResearch',
+                      body: request.body as OperationBodies['submitMaterialsAndAuthorizeResearch'],
+                    },
+            );
+            return reply.code(202).send({
+              data: result.data,
+              meta: { requestId: request.id, replayed: result.replayed },
+            });
+          }
           if (
             ['getAccountRegistration', 'registerAccount', 'getManualPublicationEntry'].includes(
               endpoint.operationId,

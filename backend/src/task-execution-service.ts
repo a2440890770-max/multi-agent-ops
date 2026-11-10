@@ -13,6 +13,7 @@ import { AuthError } from './auth.js';
 import { invalidateApproval, lockEditorialTeam } from './editorial-state.js';
 import type { createBusinessDatabase } from './database.js';
 import { activeAttempt, attemptModel, mockStages, stepModel } from './execution-model.js';
+import { AgentConfigurationSchema, type AgentConfiguration } from './agent-execution-config.js';
 import {
   auditEvents,
   clarificationAnswers,
@@ -24,6 +25,9 @@ import {
   members,
   taskContents,
   tasks,
+  accounts,
+  configVersions,
+  projectSelections,
 } from './schema.js';
 import type { SimulationScenario } from './schema.js';
 
@@ -46,7 +50,8 @@ export class TaskExecutionService {
     private read: ReadTask,
     private now: () => Date,
     private options: {
-      executorMode?: 'mock' | 'disabled';
+      executorMode?: 'mock' | 'agent' | 'disabled';
+      agentConfiguration?: AgentConfiguration;
       stepDelayMs?: number;
       executionLimits?: ExecutionLimits;
     },
@@ -212,6 +217,8 @@ export class TaskExecutionService {
             !previous ||
             previous.id !== body.attemptId!.toLowerCase() ||
             previous.status !== 'awaiting_clarification' ||
+            previous.executorMode !== previous.configSnapshot.mode ||
+            previous.executorMode !== (this.options.executorMode ?? 'mock') ||
             previous.cancelRequestedAt ||
             previous.generation !== task.workGeneration
           )
@@ -254,7 +261,28 @@ export class TaskExecutionService {
           }));
           const complete = updated.every((question) => !!question.answer?.trim());
           const status = complete ? ('queued' as const) : ('awaiting_clarification' as const);
-          const currentStep = complete ? '等待继续模拟执行' : '等待澄清';
+          const real = previous.executorMode === 'agent';
+          if (real && complete) {
+            const [last] = await tx
+              .select()
+              .from(executionSteps)
+              .where(eq(executionSteps.attemptId, previous.id))
+              .orderBy(desc(executionSteps.ordinal))
+              .limit(1);
+            await tx.insert(executionSteps).values({
+              attemptId: previous.id,
+              ordinal: (last?.ordinal ?? -1) + 1,
+              role: 'supervisor',
+              status: 'queued',
+              parentStepId: last?.id ?? null,
+              runtimeMetadata: { kind: 'supervisor' },
+            });
+          }
+          const currentStep = complete
+            ? real
+              ? '等待 Supervisor 重新判断答复'
+              : '等待继续模拟执行'
+            : '等待澄清';
           await tx
             .update(executionAttempts)
             .set({
@@ -262,7 +290,12 @@ export class TaskExecutionService {
               status,
               currentStep,
               nextRunAt: complete
-                ? new Date(now.getTime() + previous.configSnapshot.stepDelayMs)
+                ? new Date(
+                    now.getTime() +
+                      (previous.configSnapshot.mode === 'mock'
+                        ? previous.configSnapshot.stepDelayMs
+                        : 0),
+                  )
                 : null,
             })
             .where(eq(executionAttempts.id, previous.id));
@@ -282,8 +315,8 @@ export class TaskExecutionService {
             throw new AuthError(409, 'INVALID_STATE', '当前执行尝试已变化或已经结束。');
           await pauseActiveTime(tx, previous, now);
           await interruptCalls(tx, previous.id, now, null);
-          // Mock work has no external calls: stopping and fencing the old generation
-          // can be acknowledged atomically, without waiting for an external worker.
+          // Fence database writes immediately; the worker heartbeat and private Agent
+          // callback then abort the SDK session without adopting any late result.
           await tx
             .update(executionAttempts)
             .set({
@@ -324,6 +357,18 @@ export class TaskExecutionService {
             .where(eq(tasks.id, taskId));
           action = 'attempt.stopped';
         } else {
+          if (kind === 'retry' && previous?.executorMode === 'agent') {
+            const [selection] = await tx
+              .select({ id: projectSelections.id })
+              .from(projectSelections)
+              .where(eq(projectSelections.taskId, taskId));
+            if (selection)
+              throw new AuthError(
+                409,
+                'INVALID_STATE',
+                '已选题任务请使用“重新执行并授权研究”，不能通过旧入口绕过授权。',
+              );
+          }
           if (this.options.executorMode === 'disabled')
             throw new AuthError(409, 'INVALID_STATE', '模拟执行器未启用。');
           if (previous && activeAttempt(previous.status))
@@ -351,8 +396,37 @@ export class TaskExecutionService {
               '当前版本最多保留 100 次完整执行，请创建新任务。',
             );
           const scenario = body.simulationScenario ?? 'success';
+          const real = this.options.executorMode === 'agent';
+          if (real && body.simulationScenario)
+            throw new AuthError(
+              400,
+              'VALIDATION_ERROR',
+              '真实执行不接受模拟情形，请刷新任务详情。',
+            );
+          const runtime = real
+            ? AgentConfigurationSchema.parse(this.options.agentConfiguration)
+            : undefined;
+          const [accountConfig] =
+            real && task.accountId
+              ? await tx
+                  .select({
+                    description: configVersions.profile,
+                    tone: configVersions.tone,
+                    prohibitions: configVersions.forbiddenTopics,
+                    version: configVersions.version,
+                  })
+                  .from(accounts)
+                  .innerJoin(
+                    configVersions,
+                    and(
+                      eq(configVersions.accountId, accounts.id),
+                      eq(configVersions.version, accounts.currentConfigVersion),
+                    ),
+                  )
+                  .where(and(eq(accounts.id, task.accountId), eq(accounts.teamId, actor.teamId)))
+              : [];
           await invalidateApproval(tx, task, now, '已启动新的执行，旧批准失效。');
-          const delay = this.options.stepDelayMs ?? 1000;
+          const delay = real ? 0 : (this.options.stepDelayMs ?? 1000);
           const [attempt] = await tx
             .insert(executionAttempts)
             .values({
@@ -360,31 +434,75 @@ export class TaskExecutionService {
               attemptNo,
               generation: task.workGeneration + 1,
               status: 'queued',
-              executionLimits: this.options.executionLimits ?? readExecutionLimits({}),
-              currentStep: '等待模拟执行',
-              simulationScenario: scenario,
+              executorMode: real ? 'agent' : 'mock',
+              configVersion: accountConfig?.version ?? 1,
+              executionLimits: {
+                ...(this.options.executionLimits ?? readExecutionLimits({})),
+                ...(real
+                  ? {
+                      callTimeoutMs: 900000,
+                      stepTimeoutMs: 900000,
+                      attemptTimeoutMs: 1200000,
+                      maxRetries: 0,
+                    }
+                  : {}),
+              },
+              currentStep: real ? '等待获取 GitHub 热榜' : '等待模拟执行',
+              simulationScenario: real ? null : scenario,
               requestedBy: actor.id,
               createdAt: now,
               nextRunAt: new Date(now.getTime() + delay),
-              configSnapshot: {
-                executorVersion: 1,
-                mode: 'mock',
-                scenario,
-                originalRequest: task.originalRequest,
-                referenceInputs: task.referenceInputs,
-                inputRevision: task.revision,
-                stepDelayMs: delay,
-              },
+              configSnapshot: real
+                ? {
+                    executorVersion: 1,
+                    mode: 'agent',
+                    configuration: {
+                      runtime,
+                      accountContext: {
+                        accountId: task.accountId,
+                        description: accountConfig?.description ?? null,
+                        defaultAudience: null,
+                        defaultTone: accountConfig?.tone ?? null,
+                        prohibitions: accountConfig?.prohibitions ?? [],
+                      },
+                    },
+                  }
+                : {
+                    executorVersion: 1,
+                    mode: 'mock',
+                    scenario,
+                    originalRequest: task.originalRequest,
+                    referenceInputs: task.referenceInputs,
+                    inputRevision: task.revision,
+                    stepDelayMs: delay,
+                  },
             })
             .returning();
           if (!attempt) throw new Error('attempt insert failed');
           await tx.insert(executionSteps).values(
-            mockStages.map((stage, ordinal) => ({
-              attemptId: attempt.id,
-              ordinal,
-              role: stage.role,
-              status: 'queued' as const,
-            })),
+            real
+              ? [
+                  {
+                    attemptId: attempt.id,
+                    ordinal: 0,
+                    role: 'supervisor',
+                    status: 'queued',
+                    runtimeMetadata: { kind: 'github_hot' },
+                  },
+                  {
+                    attemptId: attempt.id,
+                    ordinal: 1,
+                    role: 'supervisor',
+                    status: 'queued',
+                    runtimeMetadata: { kind: 'supervisor' },
+                  },
+                ]
+              : mockStages.map((stage, ordinal) => ({
+                  attemptId: attempt.id,
+                  ordinal,
+                  role: stage.role,
+                  status: 'queued' as const,
+                })),
           );
           await tx
             .update(tasks)
@@ -394,7 +512,7 @@ export class TaskExecutionService {
               currentReviewCycleId: null,
               approvalStatus: task.currentApprovalId ? 'invalidated' : 'not_requested',
               executionStatus: 'queued',
-              currentStep: '等待模拟执行',
+              currentStep: real ? '等待获取 GitHub 热榜' : '等待模拟执行',
               errorMessage: null,
               workGeneration: attempt.generation,
               revision: task.revision + 1,

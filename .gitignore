@@ -11,4 +11,7 @@ test-results/
 *.log
 artifacts/model/
 artifacts/memory/
+artifacts/media/
 artifacts/database/
+artifacts/research/
+artifacts/verification/

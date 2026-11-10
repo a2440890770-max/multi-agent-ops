@@ -220,11 +220,18 @@ export async function admitControlledCall(
   job: ControlJob,
   now: Date,
   reservation: CallReservation,
+  trace?: { toolName: string; stepId?: string },
 ): Promise<{ call?: Call; failure?: Failure }> {
   const [step] = await tx
     .select()
     .from(executionSteps)
-    .where(and(eq(executionSteps.attemptId, job.attempt.id), eq(executionSteps.status, 'running')))
+    .where(
+      and(
+        eq(executionSteps.attemptId, job.attempt.id),
+        eq(executionSteps.status, 'running'),
+        trace?.stepId ? eq(executionSteps.id, trace.stepId) : undefined,
+      ),
+    )
     .for('update');
   if (!step || (step.nextCallAt && step.nextCallAt > now)) return {};
   const failure = timeFailure(job.attempt, step, now) ?? reservationFailure(reservation);
@@ -260,6 +267,9 @@ export async function admitControlledCall(
       callNo: (last?.callNo ?? 0) + 1,
       retryNo: step.retryCount,
       kind: reservation.kind,
+      inputSnapshotId: step.inputSnapshotId,
+      authorizationId: step.authorizationId,
+      ...(trace ? { toolName: trace.toolName } : {}),
       status: 'running',
       pricingRef: reservation.pricingRef,
       reservedTokens: reservation.maxTokens,

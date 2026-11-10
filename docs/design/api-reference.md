@@ -1,66 +1,72 @@
 # 接口逐项参考（生成文件）
 
-由 shared 契约生成；运行 `npm run contract:generate` 更新。通用权限、错误、超时与审计规则见 [接口契约说明](api-contract.md)。已实现登录、当前身份、退出、业务权限校验及 D4 创建草稿任务、同团队任务列表、筛选及详情查询；创建只保存输入，不自动执行；模拟执行的启动、停止、重试、历史及澄清答复/继续执行已实现，真实 Agent 及其他业务处理仍为 501 占位。
+由 shared 契约生成；运行 `npm run contract:generate` 更新。通用权限、错误、超时与审计规则见 [接口契约说明](api-contract.md)。已实现 Session、任务保存/查询、模拟执行和真实 Supervisor 热榜/澄清/等待选题。D9 三个研究命令已实现共享契约与原子事务；Research 执行链与报告查询已接线并离线验证；未显式启用时返回 503，无业务写入。Supervisor 已验证真实结构化输出；Research 供应商链路尚待真实验收。202 只表示接受排队，不代表研究完成。其他未实现业务返回 501。
 
-| 操作 ID                   | 方法与路径                                                         | 用途                                                                 |
-| ------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| login                     | POST /api/v1/auth/login                                            | [成员登录](#login)                                                   |
-| logout                    | POST /api/v1/auth/logout                                           | [退出并撤销当前会话](#logout)                                        |
-| getMe                     | GET /api/v1/auth/me                                                | [当前成员与权限](#getme)                                             |
-| listMembers               | GET /api/v1/members                                                | [查询团队成员](#listmembers)                                         |
-| updateMember              | PATCH /api/v1/members/:memberId                                    | [修改成员角色或状态](#updatemember)                                  |
-| getAccount                | GET /api/v1/accounts/:accountId                                    | [账号及授权摘要](#getaccount)                                        |
-| authorizeAccount          | POST /api/v1/accounts/:accountId/authorization-sessions            | [创建官方账号授权会话](#authorizeaccount)                            |
-| getAccountRegistration    | GET /api/v1/account-registration                                   | [读取团队目标微博账号登记](#getaccountregistration)                  |
-| registerAccount           | PUT /api/v1/account-registration                                   | [登记目标微博账号与人工操作资格](#registeraccount)                   |
-| getManualPublicationEntry | GET /api/v1/tasks/:taskId/manual-publication-entry                 | [核对人工发布入口的目标账号与已批准版本](#getmanualpublicationentry) |
-| createTask                | POST /api/v1/tasks                                                 | [创建草稿任务，不自动执行](#createtask)                              |
-| listTasks                 | GET /api/v1/tasks                                                  | [分页查询任务及四维状态](#listtasks)                                 |
-| getTask                   | GET /api/v1/tasks/:taskId                                          | [任务详情、锁与操作资格](#gettask)                                   |
-| taskHistory               | GET /api/v1/tasks/:taskId/history                                  | [执行步骤、尝试与审计](#taskhistory)                                 |
-| clarifyTask               | POST /api/v1/tasks/:taskId/clarifications                          | [答复当前尝试的澄清问题](#clarifytask)                               |
-| startTask                 | POST /api/v1/tasks/:taskId/attempts                                | [首次启动完整执行](#starttask)                                       |
-| stopAttempt               | POST /api/v1/tasks/:taskId/attempts/:attemptId/stop                | [停止本次执行以便编辑](#stopattempt)                                 |
-| retryTask                 | POST /api/v1/tasks/:taskId/attempt-retries                         | [重新执行或显式重启已终止任务](#retrytask)                           |
-| terminateTask             | POST /api/v1/tasks/:taskId/terminate                               | [终止任务并阻止后续发布](#terminatetask)                             |
-| copyTask                  | POST /api/v1/tasks/:taskId/copies                                  | [复制为新任务](#copytask)                                            |
-| listContent               | GET /api/v1/tasks/:taskId/content-versions                         | [内容版本历史](#listcontent)                                         |
-| getContent                | GET /api/v1/tasks/:taskId/content-versions/:versionId              | [读取某个不可变版本](#getcontent)                                    |
-| compareContent            | GET /api/v1/tasks/:taskId/content-comparison                       | [比较两个已保存版本](#comparecontent)                                |
-| saveContent               | POST /api/v1/tasks/:taskId/content-versions                        | [保存新内容版本，不自动审核](#savecontent)                           |
-| submitReview              | POST /api/v1/tasks/:taskId/reviews                                 | [手动提交当前版本审核](#submitreview)                                |
-| listReviews               | GET /api/v1/tasks/:taskId/reviews                                  | [审核周期历史](#listreviews)                                         |
-| getReview                 | GET /api/v1/tasks/:taskId/reviews/:reviewId                        | [审核结果、阻断与评分来源](#getreview)                               |
-| stopReview                | POST /api/v1/tasks/:taskId/reviews/:reviewId/stop                  | [取消人工审核](#stopreview)                                          |
-| decideReview              | POST /api/v1/tasks/:taskId/reviews/:reviewId/decisions             | [人工裁决主观分歧](#decidereview)                                    |
-| listDecisions             | GET /api/v1/tasks/:taskId/reviews/:reviewId/decisions              | [读取人工裁决历史](#listdecisions)                                   |
-| approveContent            | POST /api/v1/tasks/:taskId/approvals                               | [批准指定版本，等待用户点击发布](#approvecontent)                    |
-| publishContent            | POST /api/v1/tasks/:taskId/publications                            | [点击发布或创建人工交接](#publishcontent)                            |
-| listPublications          | GET /api/v1/tasks/:taskId/publications                             | [发布操作历史](#listpublications)                                    |
-| getPublication            | GET /api/v1/tasks/:taskId/publications/:operationId                | [读取稳定发布操作、发送及核实证据](#getpublication)                  |
-| backfillPublication       | POST /api/v1/tasks/:taskId/publications/:operationId/backfills     | [人工交接回填或明确未发送](#backfillpublication)                     |
-| verifyPublication         | POST /api/v1/tasks/:taskId/publications/:operationId/verifications | [追加人工核实，不发送文案](#verifypublication)                       |
-| retryPublication          | POST /api/v1/tasks/:taskId/publications/:operationId/retries       | [明确失败后的人工重试](#retrypublication)                            |
-| listMemories              | GET /api/v1/memories                                               | [按类型、用途、状态查询记忆](#listmemories)                          |
-| getMemory                 | GET /api/v1/memories/:memoryId                                     | [记忆详情与来源](#getmemory)                                         |
-| editMemory                | PATCH /api/v1/memories/:memoryId                                   | [编辑记忆，创建新业务版本](#editmemory)                              |
-| setMemoryAvailability     | POST /api/v1/memories/:memoryId/availability                       | [明确禁用或启用记忆](#setmemoryavailability)                         |
-| deleteMemory              | DELETE /api/v1/memories/:memoryId                                  | [删除记忆并立即停止召回](#deletememory)                              |
-| confirmMemory             | POST /api/v1/memories/:memoryId/confirmations                      | [人工确认候选，创建独立已确认经验](#confirmmemory)                   |
-| listMemorySync            | GET /api/v1/memories/:memoryId/sync-jobs                           | [受管同步/清理状态与失败范围](#listmemorysync)                       |
-| retryMemorySync           | POST /api/v1/memories/:memoryId/sync-jobs/:jobId/retry             | [重试失败的同步/清理](#retrymemorysync)                              |
-| createReflection          | POST /api/v1/tasks/:taskId/reflections                             | [手动触发复盘](#createreflection)                                    |
-| listReflections           | GET /api/v1/tasks/:taskId/reflections                              | [复盘历史](#listreflections)                                         |
-| getReflection             | GET /api/v1/tasks/:taskId/reflections/:reflectionId                | [证据、观察、假设与不确定性](#getreflection)                         |
-| retryReflection           | POST /api/v1/tasks/:taskId/reflections/:reflectionId/retries       | [再次复盘，新建关联记录](#retryreflection)                           |
-| saveCandidate             | POST /api/v1/tasks/:taskId/reflections/:reflectionId/candidates    | [把复盘建议保存为候选经验](#savecandidate)                           |
-| getConfig                 | GET /api/v1/config                                                 | [读取无密钥配置及版本](#getconfig)                                   |
-| updateConfig              | PUT /api/v1/config                                                 | [保存完整配置新版本](#updateconfig)                                  |
-| listExperiments           | GET /api/v1/experiments                                            | [离线实验摘要](#listexperiments)                                     |
-| runExperiment             | POST /api/v1/experiments                                           | [运行已配置离线实验](#runexperiment)                                 |
-| getExperiment             | GET /api/v1/experiments/:experimentId                              | [实验摘要及 Langfuse 链接](#getexperiment)                           |
-| nextBlindItem             | GET /api/v1/experiments/:experimentId/blind-items/next             | [读取当前成员未评分的匿名样本](#nextblinditem)                       |
-| submitBlindScore          | POST /api/v1/experiments/:experimentId/blind-scores                | [提交人工盲评](#submitblindscore)                                    |
+| 操作 ID                             | 方法与路径                                                         | 用途                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| login                               | POST /api/v1/auth/login                                            | [成员登录](#login)                                                   |
+| logout                              | POST /api/v1/auth/logout                                           | [退出并撤销当前会话](#logout)                                        |
+| getMe                               | GET /api/v1/auth/me                                                | [当前成员与权限](#getme)                                             |
+| listMembers                         | GET /api/v1/members                                                | [查询团队成员](#listmembers)                                         |
+| updateMember                        | PATCH /api/v1/members/:memberId                                    | [修改成员角色或状态](#updatemember)                                  |
+| getAccount                          | GET /api/v1/accounts/:accountId                                    | [账号及授权摘要](#getaccount)                                        |
+| authorizeAccount                    | POST /api/v1/accounts/:accountId/authorization-sessions            | [创建官方账号授权会话](#authorizeaccount)                            |
+| getAccountRegistration              | GET /api/v1/account-registration                                   | [读取团队目标微博账号登记](#getaccountregistration)                  |
+| registerAccount                     | PUT /api/v1/account-registration                                   | [登记目标微博账号与人工操作资格](#registeraccount)                   |
+| getManualPublicationEntry           | GET /api/v1/tasks/:taskId/manual-publication-entry                 | [核对人工发布入口的目标账号与已批准版本](#getmanualpublicationentry) |
+| createTask                          | POST /api/v1/tasks                                                 | [创建草稿任务，不自动执行](#createtask)                              |
+| listTasks                           | GET /api/v1/tasks                                                  | [分页查询任务及四维状态](#listtasks)                                 |
+| getTask                             | GET /api/v1/tasks/:taskId                                          | [任务详情、锁与操作资格](#gettask)                                   |
+| taskHistory                         | GET /api/v1/tasks/:taskId/history                                  | [执行步骤、尝试与审计](#taskhistory)                                 |
+| clarifyTask                         | POST /api/v1/tasks/:taskId/clarifications                          | [答复当前尝试的澄清问题](#clarifytask)                               |
+| startTask                           | POST /api/v1/tasks/:taskId/attempts                                | [首次启动完整执行](#starttask)                                       |
+| stopAttempt                         | POST /api/v1/tasks/:taskId/attempts/:attemptId/stop                | [停止本次执行以便编辑](#stopattempt)                                 |
+| retryTask                           | POST /api/v1/tasks/:taskId/attempt-retries                         | [重新执行或显式重启已终止任务](#retrytask)                           |
+| selectProjectAndAuthorizeResearch   | POST /api/v1/tasks/:taskId/project-selection                       | [选定项目并授权初次研究](#selectprojectandauthorizeresearch)         |
+| listResearchResults                 | GET /api/v1/tasks/:taskId/research-results                         | [查看研究报告版本历史](#listresearchresults)                         |
+| getResearchResult                   | GET /api/v1/tasks/:taskId/research-results/:resultId               | [读取完整研究报告及证据](#getresearchresult)                         |
+| getResearchSubmission               | GET /api/v1/tasks/:taskId/research-submissions/:submissionId       | [查看已提交资料与补查授权范围](#getresearchsubmission)               |
+| retryResearchAndAuthorize           | POST /api/v1/tasks/:taskId/research-attempt-retries                | [新建尝试并重新授权研究](#retryresearchandauthorize)                 |
+| submitMaterialsAndAuthorizeResearch | POST /api/v1/tasks/:taskId/research-supplements                    | [提交可选资料并授权补查](#submitmaterialsandauthorizeresearch)       |
+| terminateTask                       | POST /api/v1/tasks/:taskId/terminate                               | [终止任务并阻止后续发布](#terminatetask)                             |
+| copyTask                            | POST /api/v1/tasks/:taskId/copies                                  | [复制为新任务](#copytask)                                            |
+| listContent                         | GET /api/v1/tasks/:taskId/content-versions                         | [内容版本历史](#listcontent)                                         |
+| getContent                          | GET /api/v1/tasks/:taskId/content-versions/:versionId              | [读取某个不可变版本](#getcontent)                                    |
+| compareContent                      | GET /api/v1/tasks/:taskId/content-comparison                       | [比较两个已保存版本](#comparecontent)                                |
+| saveContent                         | POST /api/v1/tasks/:taskId/content-versions                        | [保存新内容版本，不自动审核](#savecontent)                           |
+| submitReview                        | POST /api/v1/tasks/:taskId/reviews                                 | [手动提交当前版本审核](#submitreview)                                |
+| listReviews                         | GET /api/v1/tasks/:taskId/reviews                                  | [审核周期历史](#listreviews)                                         |
+| getReview                           | GET /api/v1/tasks/:taskId/reviews/:reviewId                        | [审核结果、阻断与评分来源](#getreview)                               |
+| stopReview                          | POST /api/v1/tasks/:taskId/reviews/:reviewId/stop                  | [取消人工审核](#stopreview)                                          |
+| decideReview                        | POST /api/v1/tasks/:taskId/reviews/:reviewId/decisions             | [人工裁决主观分歧](#decidereview)                                    |
+| listDecisions                       | GET /api/v1/tasks/:taskId/reviews/:reviewId/decisions              | [读取人工裁决历史](#listdecisions)                                   |
+| approveContent                      | POST /api/v1/tasks/:taskId/approvals                               | [批准指定版本，等待用户点击发布](#approvecontent)                    |
+| publishContent                      | POST /api/v1/tasks/:taskId/publications                            | [点击发布或创建人工交接](#publishcontent)                            |
+| listPublications                    | GET /api/v1/tasks/:taskId/publications                             | [发布操作历史](#listpublications)                                    |
+| getPublication                      | GET /api/v1/tasks/:taskId/publications/:operationId                | [读取稳定发布操作、发送及核实证据](#getpublication)                  |
+| backfillPublication                 | POST /api/v1/tasks/:taskId/publications/:operationId/backfills     | [人工交接回填或明确未发送](#backfillpublication)                     |
+| verifyPublication                   | POST /api/v1/tasks/:taskId/publications/:operationId/verifications | [追加人工核实，不发送文案](#verifypublication)                       |
+| retryPublication                    | POST /api/v1/tasks/:taskId/publications/:operationId/retries       | [明确失败后的人工重试](#retrypublication)                            |
+| listMemories                        | GET /api/v1/memories                                               | [按类型、用途、状态查询记忆](#listmemories)                          |
+| getMemory                           | GET /api/v1/memories/:memoryId                                     | [记忆详情与来源](#getmemory)                                         |
+| editMemory                          | PATCH /api/v1/memories/:memoryId                                   | [编辑记忆，创建新业务版本](#editmemory)                              |
+| setMemoryAvailability               | POST /api/v1/memories/:memoryId/availability                       | [明确禁用或启用记忆](#setmemoryavailability)                         |
+| deleteMemory                        | DELETE /api/v1/memories/:memoryId                                  | [删除记忆并立即停止召回](#deletememory)                              |
+| confirmMemory                       | POST /api/v1/memories/:memoryId/confirmations                      | [人工确认候选，创建独立已确认经验](#confirmmemory)                   |
+| listMemorySync                      | GET /api/v1/memories/:memoryId/sync-jobs                           | [受管同步/清理状态与失败范围](#listmemorysync)                       |
+| retryMemorySync                     | POST /api/v1/memories/:memoryId/sync-jobs/:jobId/retry             | [重试失败的同步/清理](#retrymemorysync)                              |
+| createReflection                    | POST /api/v1/tasks/:taskId/reflections                             | [手动触发复盘](#createreflection)                                    |
+| listReflections                     | GET /api/v1/tasks/:taskId/reflections                              | [复盘历史](#listreflections)                                         |
+| getReflection                       | GET /api/v1/tasks/:taskId/reflections/:reflectionId                | [证据、观察、假设与不确定性](#getreflection)                         |
+| retryReflection                     | POST /api/v1/tasks/:taskId/reflections/:reflectionId/retries       | [再次复盘，新建关联记录](#retryreflection)                           |
+| saveCandidate                       | POST /api/v1/tasks/:taskId/reflections/:reflectionId/candidates    | [把复盘建议保存为候选经验](#savecandidate)                           |
+| getConfig                           | GET /api/v1/config                                                 | [读取无密钥配置及版本](#getconfig)                                   |
+| updateConfig                        | PUT /api/v1/config                                                 | [保存完整配置新版本](#updateconfig)                                  |
+| listExperiments                     | GET /api/v1/experiments                                            | [离线实验摘要](#listexperiments)                                     |
+| runExperiment                       | POST /api/v1/experiments                                           | [运行已配置离线实验](#runexperiment)                                 |
+| getExperiment                       | GET /api/v1/experiments/:experimentId                              | [实验摘要及 Langfuse 链接](#getexperiment)                           |
+| nextBlindItem                       | GET /api/v1/experiments/:experimentId/blind-items/next             | [读取当前成员未评分的匿名样本](#nextblinditem)                       |
+| submitBlindScore                    | POST /api/v1/experiments/:experimentId/blind-scores                | [提交人工盲评](#submitblindscore)                                    |
 
 ## login
 
@@ -367,24 +373,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 201，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
@@ -402,15 +409,15 @@ JSON 请求体（未列字段拒绝）：
 
 查询参数（未列字段拒绝）：
 
-| 字段        | 必填 | 类型                                                                                                   | 校验             |
-| ----------- | ---- | ------------------------------------------------------------------------------------------------------ | ---------------- |
-| cursor      | 否   | string                                                                                                 | 最短 1；最长 512 |
-| limit       | 否   | integer                                                                                                | 最小 1；最大 100 |
-| q           | 否   | string                                                                                                 | 最短 1；最长 120 |
-| lifecycle   | 否   | "open" / "terminated" / "published"                                                                    | 见业务前置条件   |
-| execution   | 否   | "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 见业务前置条件   |
-| approval    | 否   | "not_requested" / "pending" / "approved" / "invalidated"                                               | 见业务前置条件   |
-| publication | 否   | "not_published" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "failed"  | 见业务前置条件   |
+| 字段        | 必填 | 类型                                                                                                                                                                      | 校验             |
+| ----------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| cursor      | 否   | string                                                                                                                                                                    | 最短 1；最长 512 |
+| limit       | 否   | integer                                                                                                                                                                   | 最小 1；最大 100 |
+| q           | 否   | string                                                                                                                                                                    | 最短 1；最长 120 |
+| lifecycle   | 否   | "open" / "terminated" / "published"                                                                                                                                       | 见业务前置条件   |
+| execution   | 否   | "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 见业务前置条件   |
+| approval    | 否   | "not_requested" / "pending" / "approved" / "invalidated"                                                                                                                  | 见业务前置条件   |
+| publication | 否   | "not_published" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "failed"                                                                     | 见业务前置条件   |
 
 成功：HTTP 200，`{ data: Tasks, meta: { requestId, replayed } }`。data 字段：
 
@@ -437,24 +444,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 200，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：只读，可重试；分页使用不透明游标。
 
@@ -502,7 +510,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队、任务 open、当前模拟 attempt=awaiting_clarification，无取消意图；原子比较 expectedRevision 与 attemptId；仅接受当前未答问题的非空答复，追加记录答复人和时间，不覆盖历史；部分答复保持待澄清，全部答复后继续同一次尝试，保留原始输入和已完成步骤；当前不进行语义充分性或冲突判断。
+前置条件与业务校验：同团队、任务 open、当前 attempt=awaiting_clarification，执行模式与当前执行器一致，无取消意图；原子比较 expectedRevision 与 attemptId；追加当前未答问题的非空答复，不覆盖历史。部分答复继续等待；全部答复后继续同一 attempt。agent 模式新增 Supervisor 步骤并重新判断答复语义，不重复抓榜；mock 模式保留非空判断。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -520,24 +528,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
@@ -551,7 +560,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。尚无完整尝试且无遗留执行状态；D4 仅模拟执行，无账号也可验证；simulationScenario 默认 success，可选 failure/clarification；输入及模拟器 v1 配置冻结，计数=0；创建 queued 尝试和步骤，清空当前产出。
+前置条件与业务校验：同团队；任务 open、无工作槽、无取消意图、无发布锁；原子比较 expectedRevision。尚无完整尝试且无遗留执行状态；按服务端配置创建 mock 或 agent 尝试。mock 的 simulationScenario 默认 success；agent 拒绝模拟情形，冻结运行配置、计价和账号上下文，创建热榜及 Supervisor 步骤；启动仅授权榜单获取及任务判断，Research 需另行选题并明确授权，启动任务本身不授权深入研究。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -566,24 +575,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
@@ -597,7 +607,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：当前模拟尝试待澄清/queued/running，任务 open；模拟执行无外部调用，在同一事务记录取消、隔离旧 generation 并确认停止后解锁；任务仍 open。真实执行的异步停止尚未实现。
+前置条件与业务校验：当前尝试属于活跃状态，任务 open；事务记录取消并隔离旧 generation，拒绝迟到结果，任务仍 open。agent 模式通过心跳撤销执行权和 HTTP 断开取消远端 SDK；保留未知消耗预占额度，不自动重发。
 
 路径字段：`taskId`、`attemptId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -612,24 +622,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
@@ -643,7 +654,7 @@ JSON 请求体（未列字段拒绝）：
 
 权限：admin / operator。
 
-前置条件与业务校验：D4 仅开放任务的模拟重试，restartTerminated 必须 false；previousAttemptId 匹配当前已结束尝试，无工作槽；新 attemptNo，从头执行并保留旧记录；simulationScenario 默认 success，可选 failure/clarification；已终止任务的重启后续实现。
+前置条件与业务校验：restartTerminated 必须 false；previousAttemptId 匹配当前已结束尝试，无工作槽；按当前执行器模式新增 attemptNo 并保留旧历史和任务累计预算。agent 模式拒绝 simulationScenario，从头获取榜单和判断任务；已有选题的研究续接留待下一阶段，当前显式阻断。
 
 路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
 
@@ -661,30 +672,249 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
 超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
 
 转换：E13、A05。审计：attempt.retried / task.reopened。验收：AC-03、AC-05、AC-07（关联设计，不表示已验收）。
+
+## selectProjectAndAuthorizeResearch
+
+`POST /api/v1/tasks/:taskId/project-selection` — 选定项目并授权初次研究。
+
+权限：admin / operator。
+
+前置条件与业务校验：当前真实 attempt 等待选题、无租约/取消/发布锁；候选属于冻结榜单；任务只能选一次。选题、未消耗 initial 授权、Supervisor 排队、revision、审计和幂等响应同事务。authorizeResearch 必须 true。Research 未显式配置或存储未就绪时拒绝执行；202 仅表示排队，实际分派时才消耗授权。
+
+路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+请求头：Idempotency-Key 必填，16—128 字符；X-CSRF-Token 必填（已过期退出会话例外）。
+
+JSON 请求体（未列字段拒绝）：
+
+| 字段              | 必填 | 类型    | 校验                                                                                                                                                                                     |
+| ----------------- | ---- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| expectedRevision  | 是   | integer | 最大 9007199254740991                                                                                                                                                                    |
+| authorizeResearch | 是   | true    | 见业务前置条件                                                                                                                                                                           |
+| attemptId         | 是   | string  | 格式 uuid；匹配 ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\|00000000-0000-0000-0000-000000000000\|ffffffff-ffff-ffff-ffff-ffffffffffff)$ |
+| hotListSnapshotId | 是   | string  | 格式 uuid；匹配 ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\|00000000-0000-0000-0000-000000000000\|ffffffff-ffff-ffff-ffff-ffffffffffff)$ |
+| candidateId       | 是   | string  | 最短 1；最长 128；匹配 \S                                                                                                                                                                |
+
+成功：HTTP 202，`{ data: ResearchCommand, meta: { requestId, replayed } }`。data 字段：
+
+| 字段          | 类型          | 含义                                                |
+| ------------- | ------------- | --------------------------------------------------- |
+| task          | TaskDetail    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| selection     | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| authorization | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| submissionId  | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：research.project_selected_and_authorized。验收：D9-TX-01、D9-TX-04、D9-TX-05（关联设计，不表示已验收）。
+
+## listResearchResults
+
+`GET /api/v1/tasks/:taskId/research-results` — 查看研究报告版本历史。
+
+权限：admin / operator。
+
+前置条件与业务校验：同团队只读；默认当前 attempt，可查询历史 attempt。按版本倒序分页；旧报告只作历史查看，不能自动成为新轮输入。
+
+路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+查询参数（未列字段拒绝）：
+
+| 字段      | 必填 | 类型    | 校验                                    |
+| --------- | ---- | ------- | --------------------------------------- |
+| cursor    | 否   | string  | 最短 1；最长 512                        |
+| limit     | 否   | integer | 最小 1；最大 100                        |
+| attemptId | 否   | string  | 最短 1；最长 128；匹配 ^[A-Za-z0-9_-]+$ |
+
+成功：HTTP 200，`{ data: ResearchResults, meta: { requestId, replayed } }`。data 字段：
+
+| 字段       | 类型          | 含义                            |
+| ---------- | ------------- | ------------------------------- |
+| items      | object[]      | 当前分页结果                    |
+| nextCursor | null / string | 下一页不透明游标，null 表示结束 |
+
+重复与并发：只读，可重试；分页使用不透明游标。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：访问日志。验收：D9-REPORT-HISTORY（关联设计，不表示已验收）。
+
+## getResearchResult
+
+`GET /api/v1/tasks/:taskId/research-results/:resultId` — 读取完整研究报告及证据。
+
+权限：admin / operator。
+
+前置条件与业务校验：同团队及同任务；返回校验后完整报告、来源、实际材料和本轮工具记录，不返回租约或服务凭据。
+
+路径字段：`taskId`、`resultId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+成功：HTTP 200，`{ data: ResearchResult, meta: { requestId, replayed } }`。data 字段：
+
+| 字段            | 类型          | 含义                                                |
+| --------------- | ------------- | --------------------------------------------------- |
+| report          | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| sources         | object[]      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| materials       | object[]      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| toolAttempts    | object[]      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| metadata        | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| id              | string        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| version         | number        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| parentResultId  | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution       | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| authorizationId | string        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| selectedProject | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：只读，可重试；分页使用不透明游标。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：访问日志。验收：D9-REPORT-EVIDENCE（关联设计，不表示已验收）。
+
+## getResearchSubmission
+
+`GET /api/v1/tasks/:taskId/research-submissions/:submissionId` — 查看已提交资料与补查授权范围。
+
+权限：admin / operator。
+
+前置条件与业务校验：同团队及同任务；读取不可变资料批次、一手确认及单轮官网范围；不产生新的访问授权。
+
+路径字段：`taskId`、`submissionId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+成功：HTTP 200，`{ data: ResearchSubmission, meta: { requestId, replayed } }`。data 字段：
+
+| 字段               | 类型     | 含义                                                |
+| ------------------ | -------- | --------------------------------------------------- |
+| id                 | string   | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| attemptId          | string   | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| authorizationId    | string   | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| baseResultId       | string   | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| questionIds        | string[] | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| gapIds             | string[] | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| officialSiteGrants | object[] | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| submittedBy        | string   | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| submittedAt        | string   | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| records            | object[] | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：只读，可重试；分页使用不透明游标。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：访问日志。验收：D9-MATERIAL-HISTORY（关联设计，不表示已验收）。
+
+## retryResearchAndAuthorize
+
+`POST /api/v1/tasks/:taskId/research-attempt-retries` — 新建尝试并重新授权研究。
+
+权限：admin / operator。
+
+前置条件与业务校验：已有选题，当前真实 attempt 为 failed/cancelled，任务 open 且无发布锁。新 attempt、新 initial 授权、指针/generation、批准失效、排队、revision、审计和幂等响应同事务。沿用原选题/榜单，不抓榜、不复用旧报告或旧补交资料/官网权限；预算累计不重置。Research 未就绪返回 503，无业务写入。
+
+路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+请求头：Idempotency-Key 必填，16—128 字符；X-CSRF-Token 必填（已过期退出会话例外）。
+
+JSON 请求体（未列字段拒绝）：
+
+| 字段              | 必填 | 类型    | 校验                                                                                                                                                                                     |
+| ----------------- | ---- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| expectedRevision  | 是   | integer | 最大 9007199254740991                                                                                                                                                                    |
+| authorizeResearch | 是   | true    | 见业务前置条件                                                                                                                                                                           |
+| previousAttemptId | 是   | string  | 格式 uuid；匹配 ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\|00000000-0000-0000-0000-000000000000\|ffffffff-ffff-ffff-ffff-ffffffffffff)$ |
+| reason            | 是   | string  | 最短 1；最长 2000；匹配 \S                                                                                                                                                               |
+
+成功：HTTP 202，`{ data: ResearchCommand, meta: { requestId, replayed } }`。data 字段：
+
+| 字段          | 类型          | 含义                                                |
+| ------------- | ------------- | --------------------------------------------------- |
+| task          | TaskDetail    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| selection     | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| authorization | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| submissionId  | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：research.attempt_retried_and_authorized。验收：D9-TX-02、D9-TX-07、D9-TX-08（关联设计，不表示已验收）。
+
+## submitMaterialsAndAuthorizeResearch
+
+`POST /api/v1/tasks/:taskId/research-supplements` — 提交可选资料并授权补查。
+
+权限：admin / operator。
+
+前置条件与业务校验：当前真实 attempt 为 awaiting_materials/awaiting_content，无租约/取消/其他工作/待用授权/发布锁。基版必须为当前 attempt 最新完整报告，只选该报告已有问题及关联缺口。允许零资料；新资料/确认、提交批次、supplement 授权及排队同事务。官网范围仅本轮生效，一手确认由宿主绑定文本版本；不抓取链接。Research 未就绪返回 503，无业务写入。
+
+路径字段：`taskId` 均必填，为 1—128 位不透明 ID，仅字母、数字、下划线、连字符；逐级校验对象同属团队/任务。
+
+请求头：Idempotency-Key 必填，16—128 字符；X-CSRF-Token 必填（已过期退出会话例外）。
+
+JSON 请求体（未列字段拒绝）：
+
+| 字段                                       | 必填 | 类型          | 校验                                                                                                                                                                                     |
+| ------------------------------------------ | ---- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| expectedRevision                           | 是   | integer       | 最大 9007199254740991                                                                                                                                                                    |
+| authorizeResearch                          | 是   | true          | 见业务前置条件                                                                                                                                                                           |
+| attemptId                                  | 是   | string        | 格式 uuid；匹配 ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\|00000000-0000-0000-0000-000000000000\|ffffffff-ffff-ffff-ffff-ffffffffffff)$ |
+| baseResultId                               | 是   | string        | 最短 1；最长 128；匹配 \S                                                                                                                                                                |
+| questionIds                                | 是   | string[]      | 最少项 1；最多项 100                                                                                                                                                                     |
+| gapIds                                     | 是   | string[]      | 最少项 0；最多项 100                                                                                                                                                                     |
+| materials                                  | 是   | object[]      | 最多项 20                                                                                                                                                                                |
+| materials[].clientRef                      | 是   | string        | 最短 1；最长 128；匹配 \S                                                                                                                                                                |
+| materials[].label                          | 是   | string        | 最短 1；最长 200；匹配 \S                                                                                                                                                                |
+| materials[].text                           | 是   | string / null | 见业务前置条件                                                                                                                                                                           |
+| materials[].sourceUrl                      | 是   | string / null | 见业务前置条件                                                                                                                                                                           |
+| materials[].confirmFirstHand               | 是   | boolean       | 见业务前置条件                                                                                                                                                                           |
+| confirmExistingMaterials                   | 是   | object[]      | 最多项 20                                                                                                                                                                                |
+| confirmExistingMaterials[].materialId      | 是   | string        | 最短 1；最长 128；匹配 \S                                                                                                                                                                |
+| confirmExistingMaterials[].materialVersion | 是   | integer       | 最大 9007199254740991                                                                                                                                                                    |
+| confirmExistingMaterials[].contentSha256   | 是   | string        | 匹配 ^[a-f0-9]{64}$                                                                                                                                                                      |
+| officialSiteGrants                         | 是   | object[]      | 最多项 20                                                                                                                                                                                |
+| officialSiteGrants[].origin                | 是   | string        | 最短 1；最长 2048                                                                                                                                                                        |
+| officialSiteGrants[].pathPrefix            | 是   | string        | 最短 1；最长 2048                                                                                                                                                                        |
+
+成功：HTTP 202，`{ data: ResearchCommand, meta: { requestId, replayed } }`。data 字段：
+
+| 字段          | 类型          | 含义                                                |
+| ------------- | ------------- | --------------------------------------------------- |
+| task          | TaskDetail    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| selection     | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| authorization | object        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| submissionId  | null / string | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+
+重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
+
+超时与失败：遵循 [统一故障协议](api-contract.md#故障与冲突协议)；发布相关写入不自动重发。错误体始终为 ApiError；所有未满足前置条件的操作保持业务原状态。
+
+转换：无业务状态转换。审计：research.materials_submitted_and_authorized。验收：D9-TX-03、D9-TX-06、D9-TX-14、D9-TX-15（关联设计，不表示已验收）。
 
 ## terminateTask
 
@@ -707,24 +937,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
@@ -754,24 +985,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 201，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
@@ -938,7 +1170,7 @@ JSON 请求体（未列字段拒绝）：
 | trigger          | "initial_generation" / "manual_submit"                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | inputVersionId   | string                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentVersionId | string                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status           | "queued" / "running" / "failed" / "cancelled" / "completed" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status           | "completed" / "failed" / "queued" / "running" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | records          | ReviewRecord[]                                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | requestedBy      | string                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | configVersion    | number                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -1002,7 +1234,7 @@ JSON 请求体（未列字段拒绝）：
 | trigger          | "initial_generation" / "manual_submit"                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | inputVersionId   | string                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | currentVersionId | string                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status           | "queued" / "running" / "failed" / "cancelled" / "completed" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status           | "completed" / "failed" / "queued" / "running" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | records          | ReviewRecord[]                                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | requestedBy      | string                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | configVersion    | number                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -1037,24 +1269,25 @@ JSON 请求体（未列字段拒绝）：
 
 成功：HTTP 202，`{ data: TaskDetail, meta: { requestId, replayed } }`。data 字段：
 
-| 字段               | 类型                                                                                                          | 含义                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| errorMessage       | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentAttempt     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentContent     | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentReview      | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentApproval    | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentPublication | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| latestReflection   | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| workLock           | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| actions            | object                                                                                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| account            | null / object                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| task               | Task                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| execution          | null / "awaiting_clarification" / "queued" / "running" / "manual_required" / "ready" / "failed" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                      | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| reflection         | "failed" / "completed" / "processing" / "not_triggered"                                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| currentStep        | null / string                                                                                                 | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| 字段               | 类型                                                                                                                                                                             | 含义                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| errorMessage       | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentAttempt     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentContent     | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentReview      | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentApproval    | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentPublication | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| latestReflection   | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| workLock           | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| actions            | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| account            | null / object                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| agentExecution     | object                                                                                                                                                                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| task               | Task                                                                                                                                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| execution          | null / "failed" / "awaiting_clarification" / "awaiting_selection" / "awaiting_materials" / "awaiting_content" / "queued" / "running" / "manual_required" / "ready" / "cancelled" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| approval           | "approved" / "invalidated" / "not_requested" / "pending"                                                                                                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| publication        | "failed" / "awaiting_manual" / "publishing" / "verification_required" / "published" / "not_published"                                                                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| reflection         | "completed" / "failed" / "processing" / "not_triggered"                                                                                                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| currentStep        | null / string                                                                                                                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 
 重复与并发：须 Idempotency-Key；同键同请求重放原结果，同键不同请求 409；不同键仍校验资源唯一性。
 
@@ -1442,7 +1675,7 @@ JSON 请求体（未列字段拒绝）：
 | confirmedBy        | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | confirmedAt        | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | confirmationReason | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| syncStatus         | "running" / "failed" / "pending" / "succeeded"                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| syncStatus         | "succeeded" / "failed" / "running" / "pending"                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | deletedAt          | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | createdAt          | string                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | updatedAt          | string                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -1644,7 +1877,7 @@ JSON 请求体（未列字段拒绝）：
 | memoryId      | string                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | targetVersion | number                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | action        | "delete" / "upsert" / "disable"                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status        | "running" / "failed" / "pending" / "succeeded" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status        | "succeeded" / "failed" / "running" / "pending" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | targetScopes  | string[]                                       | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | attemptCount  | number                                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | lastError     | null / object                                  | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -1689,7 +1922,7 @@ JSON 请求体（未列字段拒绝）：
 | taskId                  | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | attemptId               | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | retryOfReflectionId     | null / string                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status                  | "failed" / "completed" / "processing" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status                  | "completed" / "failed" / "processing" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | requestedBy             | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | inputSnapshotRefs       | string[]                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | evidenceRefs            | SourceRef[]                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -1757,7 +1990,7 @@ JSON 请求体（未列字段拒绝）：
 | taskId                  | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | attemptId               | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | retryOfReflectionId     | null / string                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status                  | "failed" / "completed" / "processing" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status                  | "completed" / "failed" / "processing" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | requestedBy             | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | inputSnapshotRefs       | string[]                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | evidenceRefs            | SourceRef[]                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -1805,7 +2038,7 @@ JSON 请求体（未列字段拒绝）：
 | taskId                  | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | attemptId               | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | retryOfReflectionId     | null / string                         | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status                  | "failed" / "completed" / "processing" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status                  | "completed" / "failed" / "processing" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | requestedBy             | string                                | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | inputSnapshotRefs       | string[]                              | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | evidenceRefs            | SourceRef[]                           | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -1864,7 +2097,7 @@ JSON 请求体（未列字段拒绝）：
 | confirmedBy        | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | confirmedAt        | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | confirmationReason | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| syncStatus         | "running" / "failed" / "pending" / "succeeded"                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| syncStatus         | "succeeded" / "failed" / "running" / "pending"                            | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | deletedAt          | null / string                                                             | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | createdAt          | string                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | updatedAt          | string                                                                    | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -2008,7 +2241,7 @@ JSON 请求体（未列字段拒绝）：
 | ----------------- | --------------------------------------------- | --------------------------------------------------- |
 | id                | string                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | title             | string                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status            | "queued" / "running" / "failed" / "completed" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status            | "completed" / "failed" / "queued" / "running" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | configVersion     | number                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | datasetVersion    | string                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | offline           | true                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
@@ -2042,7 +2275,7 @@ JSON 请求体（未列字段拒绝）：
 | ----------------- | --------------------------------------------- | --------------------------------------------------- |
 | id                | string                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | title             | string                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
-| status            | "queued" / "running" / "failed" / "completed" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
+| status            | "completed" / "failed" / "queued" / "running" | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | configVersion     | number                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | datasetVersion    | string                                        | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |
 | offline           | true                                          | 同名共享对象字段，见核心对象设计与 OpenAPI 完整结构 |

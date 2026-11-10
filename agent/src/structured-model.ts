@@ -6,22 +6,85 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { createDeepSeekOptions, readDeepSeekConfig } from './model-config.js';
 import type { ModelRole } from './model-config.js';
+import type { StructuredOutputDiagnostic } from '@multi-agent-ops/shared';
+
+export class StructuredOutputValidationError extends Error {
+  constructor(
+    message: string,
+    readonly diagnostic: StructuredOutputDiagnostic,
+  ) {
+    super(message);
+    this.name = 'StructuredOutputValidationError';
+  }
+}
 
 export function validateStructuredResult<T extends z.ZodType>(
   result: Pick<SDKResultMessage, 'subtype' | 'is_error'> & { structured_output?: unknown },
   schema: T,
 ): z.output<T> {
+  const value = result.structured_output;
+  const outputType = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+  const diagnostic = (
+    errorType: StructuredOutputDiagnostic['errorType'],
+    issues: StructuredOutputDiagnostic['issues'] = [],
+  ): StructuredOutputDiagnostic => ({
+    hasStructuredOutput: value !== undefined,
+    outputType: ['undefined', 'null', 'array', 'object', 'string', 'number', 'boolean'].includes(
+      outputType,
+    )
+      ? (outputType as StructuredOutputDiagnostic['outputType'])
+      : 'undefined',
+    errorType,
+    issues,
+  });
   if (result.subtype !== 'success' || result.is_error) {
-    throw new Error(`SDK 调用失败：${result.subtype}；未采用模型输出。`);
+    throw new StructuredOutputValidationError(
+      'SDK 调用失败；未采用模型输出。',
+      diagnostic('sdk_error'),
+    );
   }
   if (result.structured_output === undefined) {
-    throw new Error('SDK 没有返回 structured_output；普通文本或 JSON 文本不能替代结构化结果。');
+    throw new StructuredOutputValidationError(
+      'SDK 没有返回 structured_output；普通文本或 JSON 文本不能替代结构化结果。',
+      diagnostic('missing_structured_output'),
+    );
   }
   const parsed = schema.safeParse(result.structured_output);
   if (!parsed.success) {
     // Report paths and issue codes only, never the rejected content.
-    const issues = parsed.error.issues.map((issue) => `${issue.path.join('.')}:${issue.code}`);
-    throw new Error(`结构化输出校验失败：${issues.join(', ')}。`);
+    const properties = new Set<string>();
+    const visit = (node: unknown): void => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+        return;
+      }
+      for (const [key, child] of Object.entries(node)) {
+        if (key === 'properties' && child && typeof child === 'object')
+          Object.keys(child).forEach((name) => properties.add(name));
+        visit(child);
+      }
+    };
+    visit(z.toJSONSchema(schema, { target: 'draft-7' }));
+    const issues = parsed.error.issues.slice(0, 20).map((issue) => ({
+      path:
+        issue.path
+          .slice(0, 12)
+          .map((part) =>
+            typeof part === 'number'
+              ? String(part)
+              : properties.has(String(part))
+                ? String(part)
+                : '[unknown-field]',
+          )
+          .join('.')
+          .slice(0, 512) || '$',
+      code: issue.code,
+    }));
+    throw new StructuredOutputValidationError(
+      `结构化输出校验失败：${issues.map((i) => `${i.path}:${i.code}`).join(', ')}。`,
+      diagnostic('schema_validation_failed', issues),
+    );
   }
   return parsed.data;
 }

@@ -427,12 +427,15 @@ export class MockTaskExecutor {
   }
   private async transition(tx: ExecutionTransaction, job: Job, now: Date) {
     const { task, attempt } = job;
+    if (attempt.executorMode !== 'mock' || attempt.configSnapshot.mode !== 'mock')
+      throw new Error('模拟执行器不能处理真实 Agent 配置。');
+    const snapshot = attempt.configSnapshot;
     const steps = await tx
       .select()
       .from(executionSteps)
       .where(eq(executionSteps.attemptId, attempt.id))
       .orderBy(executionSteps.ordinal);
-    const nextDue = new Date(now.getTime() + attempt.configSnapshot.stepDelayMs);
+    const nextDue = new Date(now.getTime() + snapshot.stepDelayMs);
     let status: typeof attempt.status = 'running';
     let currentStep: string;
     let error: Failure | null = null;
@@ -548,7 +551,7 @@ export class MockTaskExecutor {
               .filter((entry) => entry.answer !== null)
               .map((entry) => `问题：${entry.question}\n答复：${entry.answer}`)
               .join('\n\n');
-            const body = `【模拟产出，仅用于流程验证，不代表真实研究或审核结果】\n\n原始要求：\n${attempt.configSnapshot.originalRequest}${clarified ? `\n\n已保存的澄清答复：\n${clarified}` : ''}\n\n模拟执行已完成；真实文案生成将在后续接入。`;
+            const body = `【模拟产出，仅用于流程验证，不代表真实研究或审核结果】\n\n原始要求：\n${snapshot.originalRequest}${clarified ? `\n\n已保存的澄清答复：\n${clarified}` : ''}\n\n模拟执行已完成；真实文案生成将在后续接入。`;
             const [content] = await tx
               .insert(taskContents)
               .values({
